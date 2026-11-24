@@ -1,3 +1,4 @@
+// Modified for MCCMap: independent Paper fork (2026).
 package org.dynmap.common.chunk;
 
 import java.util.Arrays;
@@ -7,6 +8,10 @@ import org.dynmap.renderer.DynmapBlockState;
 
 // Generic chunk representation
 public class GenericChunk {
+    private java.util.Map<Integer, java.util.List<String>> pottery = java.util.Map.of();
+    public java.util.List<String> getPottery(int x, int y, int z) {
+        return pottery.get((y << 8) | ((z & 15) << 4) | (x & 15));
+    }
 	public final int cx, cz;	// Chunk coord (world coord / 16)
 	public final GenericChunkSection[] sections;
 	public final int sectionCnt;
@@ -81,6 +86,11 @@ public class GenericChunk {
 
     // Builder for fabricating finalized chunk
     public static class Builder {
+        private final java.util.Map<Integer, java.util.List<String>> pottery = new java.util.HashMap<>();
+        public Builder pottery(int x, int y, int z, java.util.List<String> sides) {
+            pottery.put((y << 8) | ((z & 15) << 4) | (x & 15), java.util.List.copyOf(sides));
+            return this;
+        }
     	int x;
     	int z;
     	int y_min;
@@ -93,6 +103,7 @@ public class GenericChunk {
     		reset(world_ymin, world_ymax);
     	}
     	public final void reset(int world_ymin, int world_ymax) {
+            pottery.clear();
     		x = 0; z = 0; 
     		y_min = world_ymin >> 4;
     		dataversion = 0;
@@ -229,7 +240,9 @@ public class GenericChunk {
     	}
     	// Build chunk
     	public GenericChunk build() {
-    		return new GenericChunk(x, z, y_min, sections, inhabTicks, dataversion, chunkstatus);
+            GenericChunk chunk = new GenericChunk(x, z, y_min, sections, inhabTicks, dataversion, chunkstatus);
+            chunk.pottery = java.util.Map.copyOf(pottery);
+            return chunk;
     	}
     }
 }

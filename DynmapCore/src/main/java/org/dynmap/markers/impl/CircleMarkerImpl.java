@@ -104,7 +104,7 @@ class CircleMarkerImpl implements CircleMarker, EnterExitMarker {
     boolean loadPersistentData(ConfigurationNode node, boolean isSafe) {
         markup = node.getBoolean("markup", false);
         label = MarkerAPIImpl.escapeForHTMLIfNeeded(node.getString("label", markerid), markup);
-        if (!isSafe) label = Client.sanitizeHTML(label);
+        label = Client.sanitizeHTML(label);
         world = node.getString("world", "world");
         normalized_world = DynmapWorld.normalizeWorldName(world);
         x = node.getDouble("x", 0);
@@ -113,7 +113,7 @@ class CircleMarkerImpl implements CircleMarker, EnterExitMarker {
         xr = node.getDouble("xr", 0);
         zr = node.getDouble("zr", 0);
         desc = node.getString("desc", null);
-        if (!isSafe) desc = Client.sanitizeHTML(desc);
+        desc = Client.sanitizeHTML(desc);
         lineweight = node.getInteger("strokeWeight", -1);
         if(lineweight == -1) {	/* Handle typo-saved value */
         	 lineweight = node.getInteger("stokeWeight", 3);

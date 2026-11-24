@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.servlet;
 
 import java.io.IOException;
@@ -17,40 +18,17 @@ public class ConfigJSServlet extends HttpServlet {
 
     public ConfigJSServlet(DynmapCore core) {
         Charset cs_utf8 = Charset.forName("UTF-8");
-        StringBuilder sb = new StringBuilder();
-        sb.append("var config = {\n");
-        sb.append(" url : {\n");
-        /* Get configuration URL */
-        sb.append("  configuration: '");
-        sb.append(core.configuration.getString("url/configuration", "up/configuration"));
-        sb.append("',\n");
-        /* Get update URL */
-        sb.append("  update: '");
-        sb.append(core.configuration.getString("url/update", "up/world/{world}/{timestamp}"));
-        sb.append("',\n");
-        /* Get sendmessage URL */
-        sb.append("  sendmessage: '");
-        sb.append(core.configuration.getString("url/sendmessage", "up/sendmessage"));
-        sb.append("',\n");
-        /* Get login URL */
-        sb.append("  login: '");
-        sb.append(core.configuration.getString("url/login", "up/login"));
-        sb.append("',\n");
-        /* Get register URL */
-        sb.append("  register: '");
-        sb.append(core.configuration.getString("url/register", "up/register"));
-        sb.append("',\n");
-        /* Get tiles URL */
-        sb.append("  tiles: '");
-        sb.append(core.configuration.getString("url/tiles", "tiles/"));
-        sb.append("',\n");
-        /* Get markers URL */
-        sb.append("  markers: '");
-        sb.append(core.configuration.getString("url/markers", "tiles/"));
-        sb.append("'\n }\n};\n");
+        var urls = new java.util.LinkedHashMap<String, String>();
+        urls.put("configuration", core.configuration.getString("url/configuration", "up/configuration"));
+        urls.put("update", core.configuration.getString("url/update", "up/world/{world}/{timestamp}"));
+        urls.put("tiles", core.configuration.getString("url/tiles", "tiles/"));
+        urls.put("markers", core.configuration.getString("url/markers", "tiles/"));
+        StringBuilder sb = new StringBuilder("var config = ");
+        // JSON quoting prevents configured URLs from becoming executable JavaScript.
+        sb.append(org.dynmap.web.Json.stringifyJson(java.util.Map.of("url", urls))).append(";\n");
         outputBytes = sb.toString().getBytes(cs_utf8);
     }
-    
+
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
         String dateStr = new Date().toString();

@@ -121,7 +121,7 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
     boolean loadPersistentData(ConfigurationNode node, boolean isSafe) {
         markup = node.getBoolean("markup", false);
         label = MarkerAPIImpl.escapeForHTMLIfNeeded(node.getString("label", markerid), markup);
-        if (!isSafe) label = Client.sanitizeHTML(label);
+        label = Client.sanitizeHTML(label);
         ytop = node.getDouble("ytop", 64.0);
         ybottom = node.getDouble("ybottom", 64.0);
         List<Double> xx = node.getList("x");
@@ -134,7 +134,7 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
         world = node.getString("world", "world");
         normalized_world = DynmapWorld.normalizeWorldName(world);
         desc = node.getString("desc", null);
-        if (!isSafe) desc = Client.sanitizeHTML(desc);
+        desc = Client.sanitizeHTML(desc);
         lineweight = node.getInteger("strokeWeight", -1);
         if(lineweight == -1) {	/* Handle typo-saved value */
         	 lineweight = node.getInteger("stokeWeight", 3);

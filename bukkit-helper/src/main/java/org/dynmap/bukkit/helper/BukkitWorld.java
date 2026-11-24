@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.bukkit.helper;
 /**
  * Bukkit specific implementation of DynmapWorld
@@ -11,8 +12,6 @@ import java.util.List;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.World;
-import org.bukkit.permissions.Permission;
-import org.bukkit.permissions.PermissionDefault;
 import org.dynmap.DynmapChunk;
 import org.dynmap.DynmapLocation;
 import org.dynmap.DynmapWorld;
@@ -25,19 +24,17 @@ public class BukkitWorld extends DynmapWorld {
     private World.Environment env;
     private boolean skylight;
     private DynmapLocation spawnloc = new DynmapLocation();
-    
+
     public BukkitWorld(World w) {
         this(w.getName(), w.getMaxHeight(), w.getSeaLevel(), w.getEnvironment(),
-        	BukkitVersionHelper.helper.getWorldMinY(w));
+            BukkitVersionHelper.helper.getWorldMinY(w));
         setWorldLoaded(w);
-        new Permission("dynmap.world." + getName(), "Dynmap access for world " + getName(), PermissionDefault.OP);
     }
     public BukkitWorld(String name, int height, int sealevel, World.Environment env, int miny) {
         super(name, height, sealevel, miny);
         world = null;
         this.env = env;
         skylight = (env == World.Environment.NORMAL);
-        new Permission("dynmap.world." + getName(), "Dynmap access for world " + getName(), PermissionDefault.OP);
         // Generate non-default environment lighting table
         switch (env) {
             case NETHER:
@@ -82,7 +79,7 @@ public class BukkitWorld extends DynmapWorld {
             Location sloc = world.getSpawnLocation();
             spawnloc.x = sloc.getBlockX();
             spawnloc.y = sloc.getBlockY();
-            spawnloc.z = sloc.getBlockZ(); 
+            spawnloc.z = sloc.getBlockZ();
             spawnloc.world = normalizeWorldName(sloc.getWorld().getName());
         }
         return spawnloc;
@@ -90,12 +87,11 @@ public class BukkitWorld extends DynmapWorld {
     /* Get world time */
     @Override
     public long getTime() {
-        if(world != null) {
-            return world.getTime();
-        }
-        else {
-            return -1;
-        }
+        return PaperWorldClock.time(world);
+    }
+    @Override
+    public double getTimeRate() {
+        return PaperWorldClock.rate(world);
     }
     /* World is storming */
     @Override
@@ -178,17 +174,17 @@ public class BukkitWorld extends DynmapWorld {
     @Override
     public MapChunkCache getChunkCache(List<DynmapChunk> chunks) {
         if(isLoaded()) {
-        	return BukkitVersionHelper.helper.getChunkCache(this, chunks);
+            return BukkitVersionHelper.helper.getChunkCache(this, chunks);
         }
         else {
             return null;
         }
     }
-    
+
     public World getWorld() {
         return world;
     }
-    
+
     // Return false if unimplemented
     @Override
     public int getChunkMap(TileFlags map) {
@@ -211,7 +207,7 @@ public class BukkitWorld extends DynmapWorld {
                 }
                 String[] parts = rf.getName().split("\\.");
                 if((!parts[0].equals("r")) && (parts.length != 4)) continue;
-                
+
                 RandomAccessFile rfile = null;
                 int x = 0, z = 0;
                 try {
@@ -244,9 +240,9 @@ public class BukkitWorld extends DynmapWorld {
     private Polygon lastBorder;
     @Override
     public Polygon getWorldBorder() {
-    	if (world != null) {
-    		lastBorder = BukkitVersionHelper.helper.getWorldBorder(world);
-    	}
-    	return lastBorder;
+        if (world != null) {
+            lastBorder = BukkitVersionHelper.helper.getWorldBorder(world);
+        }
+        return lastBorder;
     }
 }

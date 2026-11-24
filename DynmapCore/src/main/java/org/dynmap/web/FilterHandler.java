@@ -1,68 +1,54 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.web;
 
-import org.dynmap.Log;
-import org.eclipse.jetty.server.Handler;
-import org.eclipse.jetty.server.Request;
-import org.eclipse.jetty.server.handler.AbstractHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-
-import javax.servlet.*;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.util.Iterator;
-import java.util.LinkedList;
+import org.eclipse.jetty.ee8.nested.Handler;
+import org.eclipse.jetty.ee8.nested.Request;
+import org.eclipse.jetty.ee8.nested.HandlerWrapper;
 
-public class FilterHandler extends AbstractHandler {
-    private Handler handler;
-    private LinkedList<FilterHolder> filters = new LinkedList<FilterHolder>();
-
-    public FilterHandler() {
-    }
-    
+/** Managed filter chain for the embedded map server; no servlet sessions are needed. */
+public class FilterHandler extends HandlerWrapper {
+    private final List<Filter> filters = new ArrayList<>();
+    public FilterHandler() {}
     public FilterHandler(Handler handler, Iterable<Filter> filters) {
-        this.handler = handler;
-        for(Filter f : filters) {
-            try {
-                FilterHolder holder = new FilterHolder(f);
-                holder.start();
-                holder.initialize();
-                this.filters.add(holder);
-            }catch (Exception e){
-                Log.severe("Failed to initialize filter holder: "+e.toString());
-            }
-        }
+        setHandler(handler);
+        filters.forEach(this.filters::add);
     }
-    
-    public Handler getHandler() {
-        return handler;
+    public Iterable<Filter> getFilters() { return filters; }
+    public void addFilter(Filter filter) { filters.add(filter); }
+    @Override protected void doStart() throws Exception {
+        for (Filter filter : filters) filter.init(new FilterConfig() {
+            public String getFilterName() { return filter.getClass().getSimpleName(); }
+            public ServletContext getServletContext() { return null; }
+            public String getInitParameter(String name) { return null; }
+            public Enumeration<String> getInitParameterNames() { return Collections.emptyEnumeration(); }
+        });
+        super.doStart();
     }
-    
-    public void setHandler(Handler handler) {
-        this.handler = handler;
+    @Override protected void doStop() throws Exception {
+        try { super.doStop(); } finally { filters.forEach(Filter::destroy); }
     }
-    
-    public Iterable<FilterHolder> getFilters() {
-        return filters;
-    }
-    
-    public void addFilter(Filter filter) {
-        filters.add(new FilterHolder(filter));
-    }
-
-    @Override
-    public void handle(final String target, final Request baseRequest, final HttpServletRequest request, final HttpServletResponse response) throws IOException, ServletException {
-        final Handler handler = this.getHandler();
-        final Iterator<FilterHolder> iterator = getFilters().iterator();
-        final FilterChain chain = new FilterChain() {
-            @Override
-            public void doFilter(ServletRequest re, ServletResponse rs) throws IOException, ServletException {
-                if (iterator.hasNext()) {
-                    Filter f = iterator.next().getFilter();
-                    f.doFilter(request, response, this);
-                } else {
-                    handler.handle(target, baseRequest, request, response);
-                }
+    @Override public void handle(String target, Request baseRequest, HttpServletRequest request,
+            HttpServletResponse response) throws IOException, ServletException {
+        Iterator<Filter> iterator = filters.iterator();
+        FilterChain chain = new FilterChain() {
+            @Override public void doFilter(ServletRequest req, ServletResponse res) throws IOException, ServletException {
+                if (iterator.hasNext()) iterator.next().doFilter(req, res, this);
+                else getHandler().handle(target, baseRequest, (HttpServletRequest) req, (HttpServletResponse) res);
             }
         };
         chain.doFilter(request, response);

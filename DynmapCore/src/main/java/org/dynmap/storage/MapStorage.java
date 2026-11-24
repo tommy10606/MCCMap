@@ -1,10 +1,10 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.storage;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.zip.CRC32;
 
@@ -13,7 +13,6 @@ import org.dynmap.DynmapWorld;
 import org.dynmap.Log;
 import org.dynmap.MapType;
 import org.dynmap.PlayerFaces;
-import org.dynmap.WebAuthManager;
 import org.dynmap.utils.BufferInputStream;
 import org.dynmap.utils.BufferOutputStream;
 
@@ -21,7 +20,6 @@ import org.dynmap.utils.BufferOutputStream;
  * Generic interface for map data storage (image tiles, and associated hash codes)
  */
 public abstract class MapStorage {
-    protected String connectionString;
     private static Object lock = new Object();
     private static HashMap<String, Integer> filelocks = new HashMap<String, Integer>();
     private static final Integer WRITELOCK = (-1);
@@ -29,14 +27,14 @@ public abstract class MapStorage {
     protected boolean isShutdown;
 
     protected long serverID;
-    
+
     protected MapStorage() {
         this.serverID = 0;
         this.isShutdown = false;
     }
-    
+
     public void shutdownStorage() {
-    	this.isShutdown = true;
+        this.isShutdown = true;
     }
     // Proper modulo - versus the bogus Java behavior of negative modulo for negative numerators
     protected static final int modulo(int x, int y) {
@@ -55,7 +53,7 @@ public abstract class MapStorage {
         }
         return true;
     }
-    
+
     /**
      * Set server ID for map storage instance
      * @param serverID - server ID (default is zero)
@@ -63,7 +61,7 @@ public abstract class MapStorage {
     public void setServerID(long serverID) {
         this.serverID = serverID;
     }
-    
+
     /**
      * Get tile reference for given tile
      *
@@ -118,7 +116,7 @@ public abstract class MapStorage {
      * @return true if successful
      */
     public abstract boolean setPlayerFaceImage(String playername, PlayerFaces.FaceType facetype, BufferOutputStream encImage);
-    
+
     /**
      * Get player face image
      * @param playername - player name
@@ -142,7 +140,7 @@ public abstract class MapStorage {
      * @return true if successful
      */
     public abstract boolean setMarkerImage(String markerid, BufferOutputStream encImage);
-    
+
     /**
      * Get marker image
      * @param markerid - marker ID
@@ -157,7 +155,7 @@ public abstract class MapStorage {
      * @return true if successful
      */
     public abstract boolean setMarkerFile(String world, String content);
-    
+
     /**
      * Get marker file for world
      * @param world - world ID
@@ -194,66 +192,43 @@ public abstract class MapStorage {
         }
         return crc32.getValue();
     }
-    
+
     /**
      * URI to use for loading marker data (for external web server)
-     * 
-     * @param login_enabled - selects based on login security enabled
+     *
+
      * @return URI
      */
-    public abstract String getMarkersURI(boolean login_enabled);
+    public abstract String getMarkersURI();
     /**
      * URI to use for loading tiles (for external web server only)
-     * 
-     * @param login_enabled - selects based on login security enabled
+     *
+
      * @return URI
      */
-    public abstract String getTilesURI(boolean login_enabled);
-    /**
-     * Test if standalone JSON files should be PHP wrapped
-     * @param login_enabled - selects based on login security enabled
-     * @return whether to wrap JSON
-     */
-    public boolean wrapStandaloneJSON(boolean login_enabled) {
-        return login_enabled;
-    }
-    /**
-     * Get sendmessage URI (for external web server only)
-     * @return URI
-     */
-    public String getSendMessageURI() {
-        return "standalone/sendmessage.php";
-    }
+    public abstract String getTilesURI();
+
+
+
     /**
      * URI to use for loading configuration JSON files (for external web server only)
-     * @param login_enabled - selects based on login security enabled
+
      * @return URI
      */
-    public String getConfigurationJSONURI(boolean login_enabled) {
-        return login_enabled?"standalone/configuration.php":"standalone/dynmap_config.json?_={timestamp}";
+    public String getConfigurationJSONURI() {
+        return "standalone/mccmap_config.json?_={timestamp}";
     }
     /**
      * URI to use for loading update JSON files (for external web server only)
-     * @param login_enabled - selects based on login security enabled
+
      * @return URI
      */
-    public String getUpdateJSONURI(boolean login_enabled) {
-        return login_enabled?"standalone/update.php?world={world}&ts={timestamp}":"standalone/dynmap_{world}.json?_={timestamp}";
+    public String getUpdateJSONURI() {
+        return "standalone/mccmap_{world}.json?_={timestamp}";
     }
-    /**
-     * Add settings to dynmap_access.php needed for external server scripts
-     * @param sb - string builder for PHP file
-     * @param core - core object
-     */
-    public void addPaths(StringBuilder sb, DynmapCore core) {
-        File wpath = core.getFile(core.getWebPath());
-        String p = wpath.getAbsolutePath();
-        if(!p.endsWith("/"))
-            p += "/";
-        sb.append("$webpath = \'");
-        sb.append(WebAuthManager.esc(p));
-        sb.append("\';\n");
-    }
+
+
+
 
     private static final int RETRY_LIMIT = 4;
     /**
@@ -312,7 +287,7 @@ public abstract class MapStorage {
 
         return good;
     }
-    
+
     /**
      * Get standalone file content
      * @param fileid - standalone file ID
@@ -325,7 +300,7 @@ public abstract class MapStorage {
         File f = new File(baseStandaloneDir, fileid);
         if (getReadLock(fileid, 5000)) {
             int retrycnt = 0;
-            if (f.exists() == false) 
+            if (f.exists() == false)
                 done = true;
             while (!done) {
                 byte[] b = new byte[(int) f.length()];
@@ -358,7 +333,7 @@ public abstract class MapStorage {
         return bis;
     }
 
-    
+
     protected void releaseWriteLock(String baseFilename) {
         synchronized(lock) {
             Integer lockcnt = filelocks.get(baseFilename);    /* Get lock count */
@@ -380,7 +355,7 @@ public abstract class MapStorage {
                 Integer lockcnt = filelocks.get(baseFilename);    /* Get lock count */
                 if(lockcnt != null) {   /* If any locks, can't get write lock */
                     try {
-                        lock.wait(); 
+                        lock.wait();
                     } catch (InterruptedException ix) {
                         Log.severe("getWriteLock(" + baseFilename + ") interrupted");
                         return false;
@@ -394,7 +369,7 @@ public abstract class MapStorage {
         }
         return true;
     }
-    
+
     protected boolean getReadLock(String baseFilename, long timeout) {
         synchronized(lock) {
             boolean got_lock = false;
@@ -418,7 +393,7 @@ public abstract class MapStorage {
                         }
                         else {
                             long now = System.currentTimeMillis();
-                            long elapsed = now-starttime; 
+                            long elapsed = now-starttime;
                             if(elapsed > timeout) {   /* Give up on timeout */
                                 return false;
                             }
@@ -450,52 +425,11 @@ public abstract class MapStorage {
             }
         }
     }
-    public boolean wrapStandalonePHP() {
-        return true;
-    }
-    // For external web server only
-    public String getStandaloneLoginURI() {
-        return "standalone/login.php";
-    }
-    // For external web server only
-    public String getStandaloneRegisterURI() {
-        return "standalone/register.php";
-    }
-    public void setLoginEnabled(DynmapCore core) {
-        
-    }
-    
-    // Test if storage needs static web files
-    public boolean needsStaticWebFiles() {
-    	return false;
-    }
-    /**
-     * Set static web file content
-     * @param fileid - file path
-     * @param buffer - content for file
-     * @return true if successful
-     */
-    public boolean setStaticWebFile(String fileid, BufferOutputStream buffer) {
-    	return false;
-    }
-    
-    public void logSQLException(String opmsg, SQLException x) {
-    	if (isShutdown) return;
-    	Log.severe("SQLException: " + opmsg);
-    	Log.severe("  ErrorCode: " + x.getErrorCode() + ", SQLState=" + x.getSQLState());
-    	Log.severe("  Message: " + x.getMessage());
-    	if (connectionString != null) Log.severe("  ConnectionString: " + connectionString);
-    	Throwable cause = x.getCause();
-    	while (cause != null) {
-    		Log.severe("  CausedBy: " + cause.getMessage());
-    		cause = cause.getCause();
-    	}
-    }
-    
-    public static class StorageShutdownException extends Exception {
-		private static final long serialVersionUID = 8961471920726795043L;
 
-		public StorageShutdownException() {}
-    }
+    // For external web server only
+
+    // For external web server only
+
+
 
 }

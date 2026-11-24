@@ -11,6 +11,7 @@ public class AsynchronousQueue<T> {
     private Thread thread;
     private LinkedBlockingQueue<T> queue = new LinkedBlockingQueue<T>();
     private Set<T> set = new HashSet<T>();
+    private final Set<T> active = new HashSet<>();
     private Handler<T> handler;
     private int dequeueTime;
     private int accelDequeueTime;
@@ -34,8 +35,8 @@ public class AsynchronousQueue<T> {
             if (!set.add(t)) {
                 return false;
             }
+            queue.offer(t);
         }
-        queue.offer(t);
         return true;
     }
 
@@ -44,6 +45,7 @@ public class AsynchronousQueue<T> {
             T t = queue.take();
             synchronized (lock) {
                 set.remove(t);
+                active.add(t);
             }
             return t;
         } catch (InterruptedException ix) {
@@ -65,6 +67,15 @@ public class AsynchronousQueue<T> {
         return set.size();
     }
 
+    public boolean hasWork() { synchronized(lock) { return !set.isEmpty() || !active.isEmpty(); } }
+    public boolean hasWork(java.util.function.Predicate<T> include) {
+        synchronized(lock) {
+            for (T item : set) if (include.test(item)) return true;
+            for (T item : active) if (include.test(item)) return true;
+            return false;
+        }
+    }
+
     public List<T> popAll() {
         List<T> s;
         synchronized(lock) {
@@ -75,6 +86,8 @@ public class AsynchronousQueue<T> {
         return s;
     }
     
+    public List<T> snapshot() { synchronized(lock) { var result=new java.util.LinkedHashSet<T>(queue);result.addAll(active);return new ArrayList<T>(result); } }
+
     public void start() {
         synchronized (lock) {
             thread = new Thread(new Runnable() {
@@ -155,6 +168,7 @@ public class AsynchronousQueue<T> {
     
     public void done(T t) {
         synchronized (lock) {
+            active.remove(t);
         	if(pendingcnt > 0) pendingcnt--;
         	lock.notifyAll();
         }

@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.regions;
 
 import org.dynmap.Component;
@@ -13,6 +14,10 @@ public class RegionsComponent extends Component {
         super(plugin, configuration);
         
         String regiontype = configuration.getString("name", "WorldGuard");
+        if (regiontype.equals("WorldGuard")) {
+            Log.info("WorldGuard regions are native in MCCMap; configure worldguard-regions instead of a map add-on");
+            return;
+        }
         /* Check if a deprecated component */
         for(int i = 0; i < deprecated_ids.length; i++) {
             if(regiontype.equals(deprecated_ids[i])) {  /* If match */

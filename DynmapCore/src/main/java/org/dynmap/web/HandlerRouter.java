@@ -1,67 +1,56 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.web;
 
-import org.eclipse.jetty.http.PathMap;
-import org.eclipse.jetty.server.Handler;
-import org.eclipse.jetty.server.Request;
-import org.eclipse.jetty.server.handler.AbstractHandler;
-
+import org.eclipse.jetty.ee8.nested.AbstractHandler;
+import org.eclipse.jetty.ee8.nested.Handler;
+import org.eclipse.jetty.ee8.nested.Request;
 import javax.servlet.Servlet;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
-@SuppressWarnings("deprecation")
+/** Exact and prefix routes for the public, session-free map server. */
 public class HandlerRouter extends AbstractHandler {
-
-    PathMap<HandlerOrServlet> pathMap = new PathMap<HandlerOrServlet>();
-    
-    private static class HandlerOrServlet {
-    	Servlet servlet;
-    	Handler handler;
-    	HandlerOrServlet(Servlet s) { servlet = s; handler = null; }
-    	HandlerOrServlet(Handler h) { servlet = null; handler = h; }
-    };
-    
-    public HandlerRouter() {
+    private record Route(String path, Handler handler, Servlet servlet) {
+        boolean matches(String target) {
+            return path.equals("/") || (path.endsWith("/*")
+                ? target.equals(path.substring(0, path.length() - 2)) || target.startsWith(path.substring(0, path.length() - 1))
+                : target.equals(path));
+        }
     }
-    
+    private final List<Route> routes = new CopyOnWriteArrayList<>();
     public void addHandler(String path, Handler handler) {
-        pathMap.put(path, new HandlerOrServlet(handler));
+        if (getServer() != null) handler.setServer(getServer());
+        addBean(handler);
+        routes.add(new Route(path, handler, null));
     }
-    
-    public void addServlet(String path, Servlet servlet) {
-        pathMap.put(path, new HandlerOrServlet(servlet));
+    @Override public void setServer(org.eclipse.jetty.server.Server server) {
+        super.setServer(server);
+        for (Route route : routes) if (route.handler != null) route.handler.setServer(server);
     }
-    
+    public void addServlet(String path, Servlet servlet) { routes.add(new Route(path, null, servlet)); }
     public void clear() {
-        pathMap.clear();
+        for (Route route : routes) if (route.handler != null) removeBean(route.handler);
+        routes.clear();
     }
-    
-    @Override
-    public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-        String pathInfo = request.getPathInfo();
-        PathMap.MappedEntry<HandlerOrServlet> e = pathMap.getMatch(pathInfo);
-        String mappedPath = e.getMapped();
-
-        String childPathInfo = pathInfo;
-        if (mappedPath != null) {
-            int i = 0;
-            while(i<mappedPath.length() && mappedPath.charAt(i) == pathInfo.charAt(i)){ i++; }
-            childPathInfo = childPathInfo.substring(i);
+    @Override public void handle(String target, Request baseRequest, HttpServletRequest request,
+            HttpServletResponse response) throws IOException, ServletException {
+        String path = request.getPathInfo();
+        Route match = null;
+        for (Route route : routes) if (route.matches(path) && (match == null || route.path.length() > match.path.length())) match = route;
+        if (match == null) { response.sendError(404); baseRequest.setHandled(true); return; }
+        String childPath = path;
+        if (match.path.endsWith("/*")) childPath = path.substring(match.path.length() - 2);
+        final String routedPath = childPath;
+        HttpServletRequest routed = match.path.endsWith("/*") ? new javax.servlet.http.HttpServletRequestWrapper(request) {
+            @Override public String getPathInfo() { return routedPath; }
+        } : request;
+        {
+            if (match.handler != null) match.handler.handle(childPath, baseRequest, routed, response);
+            else { match.servlet.service(routed, response); baseRequest.setHandled(true); }
         }
-
-        org.eclipse.jetty.server.Request r = (org.eclipse.jetty.server.Request)request;
-        r.setPathInfo(childPathInfo);
-
-        HandlerOrServlet o = e.getValue();
-        if (o.handler != null) {
-            o.handler.handle(target, baseRequest, request, response);
-        }
-        else if (o.servlet != null) {
-            o.servlet.service(request, response);
-        }
-
-        r.setPathInfo(pathInfo);
     }
 }

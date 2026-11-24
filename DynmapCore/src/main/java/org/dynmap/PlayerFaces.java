@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import org.dynmap.MapType.ImageFormat;
@@ -20,23 +21,28 @@ import java.net.URLEncoder;
 import java.util.UUID;
 
 /**
- * Listen for player logins, and process player faces by fetching skins *
+ * Listen for player joins, and process player faces by fetching skins *
  */
-public class PlayerFaces {
+public class PlayerFaces implements AutoCloseable {
+    private final java.util.concurrent.ThreadPoolExecutor skinWorkers = new java.util.concurrent.ThreadPoolExecutor(2, 2, 30, java.util.concurrent.TimeUnit.SECONDS,
+        new java.util.concurrent.ArrayBlockingQueue<>(64), r -> { Thread t = new Thread(r, "MCCMap skins"); t.setDaemon(true); return t; });
+    private final java.util.Set<UUID> pendingSkins = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Map<UUID, Long> recentSkins = new java.util.LinkedHashMap<>();
     private boolean fetchskins;
     private boolean refreshskins;
     private String skinurl;
+    private final java.util.List<String> skinAllowedHosts;
     public MapStorage storage;
-    
+
     public enum FaceType {
         FACE_8X8("8x8", 0),
         FACE_16X16("16x16", 1),
         FACE_32X32("32x32", 2),
         BODY_32X32("body", 3);
-        
+
         public final String id;
         public final int typeID;
-        
+
         FaceType(String id, int typeid) {
             this.id = id;
             this.typeID = typeid;
@@ -58,44 +64,59 @@ public class PlayerFaces {
             return null;
         }
     }
-    
-    private void copyLayersToTarget(BufferedImage srcimg, int layer1x, int layer1y, int layer2x, int layer2y, int w, int h, int[] dest, int destoff, int destscansize)
+
+    static void copyLayersToTarget(BufferedImage srcimg, int layer1x, int layer1y, int layer2x, int layer2y, int w, int h, int[] dest, int destoff, int destscansize)
     {
-    	int[] l1 = new int[w * h];
-    	int[] l2 = new int[w * h];
-    	int imgh = srcimg.getHeight();
-    	// Read layer 1
-    	if (imgh >= (layer1y+h))
-    		srcimg.getRGB(layer1x, layer1y, w, h, l1, 0, w);
+        int[] l1 = new int[w * h];
+        int[] l2 = new int[w * h];
+        int imgh = srcimg.getHeight();
+        // Read layer 1
+        if (imgh >= (layer1y+h))
+            srcimg.getRGB(layer1x, layer1y, w, h, l1, 0, w);
         // Read layer 2
-    	if (imgh >= (layer2y+h))
-    		srcimg.getRGB(layer2x, layer2y, w, h, l2, 0, w);
-        // Apply layer1 to layer 1
-        boolean transp = false;
+        if (imgh >= (layer2y+h))
+            srcimg.getRGB(layer2x, layer2y, w, h, l2, 0, w);
+        // Legacy skins can use a single opaque color for the unused accessory region.
+        boolean hasAccessory = false;
         int v = l2[0];
         for (int i = 0; i < (w*h); i++) {
-        	if ((l2[i] & 0xFF000000) == 0) {
-        		transp = true;
-        		break;
-        	}
-        	/* If any different values, render face too */
-        	else if (l2[i] != v) {
-        	    transp = true;
-        	    break;
-        	}
-        }
-        if(transp) {
-            for (int i = 0; i < (w*h); i++) {
-            	if ((l2[i] & 0xFF000000) != 0)
-            		l1[i] = l2[i];
+            if ((l2[i] >>> 24) != 255) {
+                hasAccessory = true;
+                break;
+            }
+            /* If any different values, render face too */
+            else if (l2[i] != v) {
+                hasAccessory = true;
+                break;
             }
         }
-    	// Write to dest
-        for (int y = 0; y < h; y++) {
-        	for (int x = 0; x < w; x++) {
-        		dest[destoff + (y*destscansize + x)] = l1[(y*w)+x];
-        	}
+        if(hasAccessory) {
+            for (int i = 0; i < (w*h); i++) {
+                l1[i] = blendSkinPixel(l1[i], l2[i]);
+            }
         }
+        // Write to dest
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                dest[destoff + (y*destscansize + x)] = l1[(y*w)+x];
+            }
+        }
+    }
+
+    /** Straight-alpha source-over composition, preserving the base under translucent accessories. */
+    private static int blendSkinPixel(int base, int overlay) {
+        int sourceAlpha = overlay >>> 24;
+        if (sourceAlpha == 0) return base;
+        if (sourceAlpha == 255) return overlay;
+        int baseWeight = (base >>> 24) * (255 - sourceAlpha);
+        int alpha = sourceAlpha * 255 + baseWeight;
+        int result = ((alpha + 127) / 255) << 24;
+        for (int shift = 16; shift >= 0; shift -= 8) {
+            int channel = (((overlay >>> shift) & 255) * sourceAlpha * 255
+                    + ((base >>> shift) & 255) * baseWeight + alpha / 2) / alpha;
+            result |= channel << shift;
+        }
+        return result;
     }
 
     private void copyLayersToTarget(BufferedImage srcimg, int layer1x, int layer1y, int layer2x, int layer2y, int w, int h, BufferedImage dest, int destoff, int destscansize)
@@ -104,7 +125,7 @@ public class PlayerFaces {
         copyLayersToTarget(srcimg,layer1x,layer1y,layer2x,layer2y,w,h,tmp,0,w);
         dest.setRGB(0,0,w,h,tmp,destoff,destscansize);
     }
-    
+
     private class LoadPlayerImages implements Runnable {
         private SkinUrlProvider mSkinUrlProvider;
         public final String playername;
@@ -125,7 +146,7 @@ public class PlayerFaces {
             boolean has_body = storage.hasPlayerFaceImage(playername, FaceType.BODY_32X32);
             boolean missing_any = !(has_8x8 && has_16x16 && has_32x32 && has_body);
             boolean is_64x32_skin = false;
-            
+
             BufferedImage img = null;
             try {
                 if(fetchskins && (refreshskins || missing_any)) {
@@ -139,15 +160,16 @@ public class PlayerFaces {
                             url = new URL(playerskinurl);
                         }
                     } else {
-                        url = mSkinUrlProvider.getSkinUrl(playername);
+                        url = mSkinUrlProvider.getSkinUrl(playername, playeruuid);
                     }
 
                     if (url != null)
-                        img = ImageIO.read(url);    /* Load skin for player */
+                        img = SkinImageLoader.load(url, skinAllowedHosts);
                 }
             } catch (IOException iox) {
                 Debug.debug("Error loading skin for '" + playername + "' - " + iox);
             }
+            if (Thread.currentThread().isInterrupted()) { if (img != null) img.flush(); return; }
             if(img == null) {
                 try {
                     InputStream in = getClass().getResourceAsStream("/char.png");
@@ -168,6 +190,7 @@ public class PlayerFaces {
                 is_64x32_skin = true;
             }
 
+            if (Thread.currentThread().isInterrupted()) { img.flush(); return; }
             /* Get buffered image for face at original size */
             int scale = img.getWidth()/8 /8;
             BufferedImage faceOriginal = new BufferedImage(8*scale, 8*scale, BufferedImage.TYPE_INT_ARGB);
@@ -274,7 +297,7 @@ public class PlayerFaces {
                 else {
                     copyLayersToTarget(skin_buff, 36, 52, 52, 52, 4, 12, body32x32.argb_buf, 8 * 32 + 20, 32);
                 }
-                
+
                 BufferOutputStream bos = ImageIOManager.imageIOEncode(body32x32.buf_img, ImageFormat.FORMAT_PNG);
                 if (bos != null) {
                     storage.setPlayerFaceImage(playername, FaceType.BODY_32X32, bos);
@@ -291,21 +314,37 @@ public class PlayerFaces {
         }
     }
     public PlayerFaces(DynmapCore core) {
-        fetchskins = core.configuration.getBoolean("fetchskins", true);    /* Control whether to fetch skins */ 
-        refreshskins = core.configuration.getBoolean("refreshskins", true);    /* Control whether to update existing fetched skins or faces */ 
+        skinAllowedHosts = java.util.List.copyOf(core.configuration.getStrings("skin-download-allowed-hosts", java.util.List.of()));
+        fetchskins = core.configuration.getBoolean("fetchskins", true);    /* Control whether to fetch skins */
+        refreshskins = core.configuration.getBoolean("refreshskins", true);    /* Control whether to update existing fetched skins or faces */
         skinurl = core.configuration.getString("skin-url", "");
         // These don't work anymore - Mojang retired them
         if (skinurl.equals("http://s3.amazonaws.com/MinecraftSkins/%player%.png") ||
-        		skinurl.equals("http://skins.minecraft.net/MinecraftSkins/%player%.png")) {
+                skinurl.equals("http://skins.minecraft.net/MinecraftSkins/%player%.png")) {
             skinurl = "";
         }
         core.listenerManager.addListener(EventType.PLAYER_JOIN, new PlayerEventListener() {
             @Override
             public void playerEvent(DynmapPlayer p) {
                 Runnable job = new LoadPlayerImages(p.getName(), p.getSkinURL(), p.getUUID(), core.skinUrlProvider);
-                MapManager.scheduleDelayedJob(job, 0);
+                UUID uuid = p.getUUID();
+                synchronized (recentSkins) {
+                    long now = System.currentTimeMillis();
+                    if (recentSkins.getOrDefault(uuid, 0L) + 600000 > now || !pendingSkins.add(uuid)) return;
+                    try {
+                        skinWorkers.execute(() -> { try { job.run(); } finally { pendingSkins.remove(uuid); } });
+                        recentSkins.put(uuid, now);
+                        while (recentSkins.size() > 4096) recentSkins.remove(recentSkins.keySet().iterator().next());
+                    } catch (java.util.concurrent.RejectedExecutionException full) { pendingSkins.remove(uuid); }
+                }
             }
         });
         storage = core.getDefaultMapStorage();
+    }
+    @Override public void close() {
+        skinWorkers.shutdownNow();
+        try { skinWorkers.awaitTermination(6, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        pendingSkins.clear(); synchronized (recentSkins) { recentSkins.clear(); }
     }
 }

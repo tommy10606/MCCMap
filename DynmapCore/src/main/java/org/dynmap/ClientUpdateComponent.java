@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import static org.dynmap.JSONUtils.a;
@@ -14,24 +15,24 @@ public class ClientUpdateComponent extends Component {
     private boolean hideifsneaking;
     private boolean hideifspectator;
     private boolean hideifinvisiblepotion;
-    private boolean is_protected;
+    private boolean hidePlayerInfo;
     public static boolean usePlayerColors;
     public static boolean hideNames;
-    
+
     public ClientUpdateComponent(final DynmapCore core, ConfigurationNode configuration) {
         super(core, configuration);
-        
+
         hideNames = configuration.getBoolean("hidenames", false);
         hideifshadow = configuration.getInteger("hideifshadow", 15);
         hideifunder = configuration.getInteger("hideifundercover", 15);
         hideifsneaking = configuration.getBoolean("hideifsneaking", false);
         hideifspectator = configuration.getBoolean("hideifspectator", false);
         hideifinvisiblepotion = configuration.getBoolean("hide-if-invisiblity-potion", true);
-        is_protected = configuration.getBoolean("protected-player-info", false);
+        hidePlayerInfo = configuration.getBoolean("hide-player-info", false);
         usePlayerColors = configuration.getBoolean("use-name-colors", false);
-        if(is_protected)
+        if(hidePlayerInfo)
             core.player_info_protected = true;
-        
+
         core.events.addListener("buildclientupdate", new Event.Listener<ClientUpdateEvent>() {
             @Override
             public void triggered(ClientUpdateEvent e) {
@@ -39,27 +40,16 @@ public class ClientUpdateComponent extends Component {
             }
         });
     }
-    
+
     protected void buildClientUpdate(ClientUpdateEvent e) {
         DynmapWorld world = e.world;
         JSONObject u = e.update;
         long since = e.timestamp;
         String worldName = world.getName();
-        boolean see_all = true;
-        
-        if(is_protected && (!e.include_all_users)) {
-            if(e.user != null)
-                see_all = core.getServer().checkPlayerPermission(e.user, "playermarkers.seeall");
-            else
-                see_all = false;
-        }
-        if((e.include_all_users) && is_protected) { /* If JSON request AND protected, leave mark for script */
-            s(u, "protected", true);
-        }
-        
         s(u, "confighash", core.getConfigHashcode());
 
         s(u, "servertime", world.getTime() % 24000);
+        s(u, "servertimeRate", world.getTimeRate());
         s(u, "hasStorm", world.hasStorm());
         s(u, "isThundering", world.isThundering());
 
@@ -73,7 +63,7 @@ public class ClientUpdateComponent extends Component {
                 hide = true;
             }
             JSONObject jp = new JSONObject();
-            
+
             s(jp, "type", "player");
             if (hideNames)
                 s(jp, "name", "");
@@ -81,7 +71,7 @@ public class ClientUpdateComponent extends Component {
                 s(jp, "name", Client.encodeColorInHTML(p.getDisplayName()));
             else
                 s(jp, "name", Client.stripColor(p.getDisplayName()));
-            s(jp, "account", p.getName());
+            s(jp, "playerId", p.getName());
             if((!hide) && (hideifshadow < 15)) {
                 if(pw.getLightLevel((int)pl.x, (int)pl.y, (int)pl.z) <= hideifshadow) {
                     hide = true;
@@ -105,18 +95,11 @@ public class ClientUpdateComponent extends Component {
             if((!hide) && hideifspectator && p.isSpectator()) {
                 hide = true;
             }
-            if((!hide) && is_protected && (!see_all)) {
-                if(e.user != null) {
-                    hide = !core.testIfPlayerVisibleToPlayer(e.user, p.getName());
-                }
-                else {
-                    hide = true;
-                }
-            }
+            if (hidePlayerInfo) hide = true;
             if((!hide) && hideifinvisiblepotion && p.isInvisible()) {
                 hide = true;
             }
-                
+
             /* Don't leak player location for world not visible on maps, or if sendposition disbaled */
             DynmapWorld pworld = MapManager.mapman.worldsLookup.get(pl.world);
             /* Fix typo on 'sendpositon' to 'sendposition', keep bad one in case someone used it */
@@ -150,13 +133,13 @@ public class ClientUpdateComponent extends Component {
             for(DynmapPlayer p : hidden) {
                 JSONObject jp = new JSONObject();
                 s(jp, "type", "player");
-                if (hideNames) 
+                if (hideNames)
                     s(jp, "name", "");
                 else if (usePlayerColors)
                     s(jp, "name", Client.encodeColorInHTML(p.getDisplayName()));
                 else
                     s(jp, "name", Client.stripColor(p.getDisplayName()));
-                s(jp, "account", p.getName());
+                s(jp, "playerId", p.getName());
                 s(jp, "world", "-hidden-player-");
                 s(jp, "x", 0.0);
                 s(jp, "y", 64.0);

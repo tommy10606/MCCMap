@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import java.io.File;
@@ -9,19 +10,18 @@ import org.dynmap.utils.TileFlags;
 import org.json.simple.JSONObject;
 
 public abstract class MapType {
-    private boolean is_protected;
     /**
      * Is the map type read-only? (i.e. should not be updated by renderer)
      */
     private boolean is_readonly;
     protected int tileupdatedelay;
-    
+
     public enum ImageVariant {
         STANDARD(""),   // Typical image
         DAY("day");     // Day (no shadow) image
         public final String variantSuffix;
         public final String variantID;
-        
+
         ImageVariant(String varid) {
             if (varid.length() > 0) {
                 variantSuffix = "_" + varid;
@@ -32,13 +32,13 @@ public abstract class MapType {
             variantID = varid;
         }
     }
-    
+
     public enum ImageEncoding {
         PNG("png", "image/png", true), JPG("jpg", "image/jpeg", false), WEBP("webp", "image/webp", true);
         public final String ext;
         public final String mimetype;
         public final boolean hasAlpha;
-        
+
         ImageEncoding(String ext, String mime, boolean has_alpha) {
             this.ext = ext;
             this.mimetype = mime;
@@ -46,7 +46,7 @@ public abstract class MapType {
         }
         public String getFileExt() { return ext; }
         public String getContentType() { return mimetype; }
-        
+
         public static ImageEncoding fromOrd(int ix) {
             ImageEncoding[] v = values();
             if ((ix >= 0) && (ix < v.length))
@@ -72,7 +72,7 @@ public abstract class MapType {
             return null;
         }
     }
-    
+
     public enum ImageFormat {
         FORMAT_PNG("png", 0.0f, ImageEncoding.PNG),
         FORMAT_JPG75("jpg-q75", 0.75f, ImageEncoding.JPG),
@@ -93,7 +93,7 @@ public abstract class MapType {
         String id;
         float qual;
         ImageEncoding enc;
-        
+
         ImageFormat(String id, float quality, ImageEncoding enc) {
             this.id = id;
             this.qual = quality;
@@ -113,7 +113,7 @@ public abstract class MapType {
             return null;
         }
     };
-    
+
     public static class ZoomInfo {
         public String prefix;
         public int  background_argb;
@@ -121,7 +121,7 @@ public abstract class MapType {
     }
 
     public abstract void addMapTiles(List<MapTile> list, DynmapWorld w, int tx, int ty);
-    
+
     public abstract List<TileFlags.TileCoord> getTileCoords(DynmapWorld w, int x, int y, int z);
 
     public abstract List<TileFlags.TileCoord> getTileCoords(DynmapWorld w, int minx, int miny, int minz, int maxx, int maxy, int maxz);
@@ -129,7 +129,7 @@ public abstract class MapType {
     public abstract MapTile[] getAdjecentTiles(MapTile tile);
 
     public abstract List<DynmapChunk> getRequiredChunks(MapTile tile);
-    
+
     public abstract int getTileSize();
 
     public void buildClientConfiguration(JSONObject worldObject, DynmapWorld w) {
@@ -150,10 +150,10 @@ public abstract class MapType {
     public abstract List<MapType> getMapsSharingRender(DynmapWorld w);
     /* Get names of maps rendered concurrently with this map type in this world */
     public abstract List<String> getMapNamesSharingRender(DynmapWorld w);
-    
+
     /* Return number of zoom levels needed by this map (before extra levels from extrazoomout) */
     public int getMapZoomOutLevels() { return 0; }
-    
+
     public ImageFormat getImageFormat() { return ImageFormat.FORMAT_PNG; }
 
     public int getBackgroundARGBNight() { return 0; }
@@ -166,13 +166,13 @@ public abstract class MapType {
         else
             return getBackgroundARGBNight();
     }
- 
+
     public void purgeOldTiles(DynmapWorld world, TileFlags rendered) { }
- 
+
     public interface FileCallback {
         public void fileFound(File f, File parent, boolean day);
     }
-    
+
     protected void walkMapTree(File root, FileCallback cb, boolean day) {
         LinkedList<File> dirs = new LinkedList<File>();
         String ext = "." + getImageFormat().getFileExt();
@@ -194,23 +194,15 @@ public abstract class MapType {
             }
         }
     }
-    
+
     public ConfigurationNode saveConfiguration() {
         ConfigurationNode cn = new ConfigurationNode();
         cn.put("class", this.getClass().getName()); /* Add class */
         cn.put("name", getName());  /* Get map name */
         return cn;
     }
-    public boolean isProtected() {
-        return is_protected;
-    }
-    public boolean setProtected(boolean p) {
-        if(is_protected != p) {
-            is_protected = p;
-            return true;
-        }
-        return false;
-    }
+
+
     /**
      * Is the map type read-only? (i.e. should not be updated by renderer)
      * @return true if read-only
@@ -232,7 +224,21 @@ public abstract class MapType {
         return false;
     }
     public abstract String getPrefix();
-    
+    public record TilePreviewSource(String prefix,int scaleShift,ImageEncoding encoding) {}
+    /** Sources are ordered oldest first; their relative grids are bound to this layout. */
+    public java.util.List<TilePreviewSource> getTilePreviewSources() {
+        String prefix=getLegacyTilePrefix();if(prefix==null || prefix.equals(getPrefix()))return java.util.List.of();
+        var sources=new java.util.ArrayList<TilePreviewSource>();
+        for(ImageEncoding encoding:new ImageEncoding[]{ImageEncoding.JPG,ImageEncoding.PNG}) {
+            int shift=getLegacyTileScaleShift(encoding);
+            if(shift>=0 && shift<=4)sources.add(new TilePreviewSource(prefix,shift,encoding));
+        }
+        return sources;
+    }
+    public String getLegacyTilePrefix() {return null;}
+    public int getLegacyTileScaleShift() {return -1;}
+    public int getLegacyTileScaleShift(ImageEncoding encoding) {return getLegacyTileScaleShift();}
+
     public int getTileUpdateDelay(DynmapWorld w) {
         if(tileupdatedelay > 0)
             return tileupdatedelay;
@@ -247,7 +253,7 @@ public abstract class MapType {
         return false;
     }
     private static final ImageVariant[] defVariant = { ImageVariant.STANDARD };
-    
+
     public ImageVariant[] getVariants() {
         return defVariant;
     }

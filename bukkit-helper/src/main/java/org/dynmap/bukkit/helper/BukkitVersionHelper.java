@@ -1,230 +1,83 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.bukkit.helper;
 
-import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-
-import org.bukkit.Chunk;
-import org.bukkit.ChunkSnapshot;
+import org.bukkit.Bukkit;
 import org.bukkit.World;
+import org.bukkit.WorldBorder;
 import org.bukkit.entity.Player;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import org.dynmap.DynmapChunk;
 import org.dynmap.common.chunk.GenericChunkCache;
 import org.dynmap.renderer.DynmapBlockState;
 import org.dynmap.utils.MapChunkCache;
 import org.dynmap.utils.Polygon;
 
-/**
- * Helper for isolation of bukkit version specific issues
- */
-public abstract class BukkitVersionHelper {
-    public static BukkitVersionHelper helper = null;
-    
+/** Paper 26.3 adapter. Modified from Dynmap's version-specific helpers. */
+public final class BukkitVersionHelper {
+    public static BukkitVersionHelper helper;
     public static GenericChunkCache gencache;
 
-    public static DynmapBlockState[] stateByID;
-    
-    protected boolean isBlockIdNeeded() {
-        return true;
+    private Registry<Biome> biomes() {
+        return MinecraftServer.getServer().registryAccess().lookupOrThrow(Registries.BIOME);
     }
-    protected boolean isBiomeBaseListNeeded() {
-    	return true;
-    }
+    public Object[] getBiomeBaseList() { return biomes().stream().toArray(); }
+    public String[] getBiomeNames() { return biomes().keySet().stream().map(Object::toString).toArray(String[]::new); }
+    public String getBiomeBaseResourceLocsation(Object biome) { return biomes().getKey((Biome) biome).toString(); }
+    public String getBiomeBaseIDString(Object biome) { return biomes().getKey((Biome) biome).getPath(); }
+    public float getBiomeBaseTemperature(Object biome) { return ((Biome) biome).getBaseTemperature(); }
+    public float getBiomeBaseHumidity(Object biome) { return ((Biome) biome).climateSettings.downfall(); }
+    public int getBiomeBaseWaterMult(Object biome) { return ((Biome) biome).getWaterColor(); }
+    public String[] getBlockNames() { return BuiltInRegistries.BLOCK.keySet().stream().map(Object::toString).toArray(String[]::new); }
 
-    protected BukkitVersionHelper() {
-        
-    }
-    /**
-     * Get if it's unsafe to load chunks async
-     */
-    public abstract boolean isUnsafeAsync();
-    /**
-     * Get list of defined biomebase objects
-     */
-    public abstract Object[] getBiomeBaseList();
-    /** 
-     * Get temperature from biomebase
-     */
-    public abstract float getBiomeBaseTemperature(Object bb);
-    /** 
-     * Get humidity from biomebase
-     */
-    public abstract float getBiomeBaseHumidity(Object bb);
-    /**
-     * Get ID string from biomebase
-     */
-    public abstract String getBiomeBaseIDString(Object bb);
-    /**
-     * Get resource location from biomebase (1.18+)
-     */
-    public String getBiomeBaseResourceLocsation(Object bb) { return null; }
-    /** 
-     * Get ID from biomebase
-     */
-    public abstract int getBiomeBaseID(Object bb);
-    /**
-     *  Get unload queue for given NMS world
-     */
-    public abstract Object getUnloadQueue(World world);
-    /**
-     *  For testing unload queue for presence of givne chunk
-     */
-    public abstract boolean isInUnloadQueue(Object unloadqueue, int x, int z);
-    /**
-     * Read raw biome ID from snapshot
-     */
-    public abstract Object[] getBiomeBaseFromSnapshot(ChunkSnapshot css);
-    /**
-     * Test if normal chunk snapshot
-     */
-//    public abstract boolean isCraftChunkSnapshot(ChunkSnapshot css);
-    /**
-     * Get inhabited ticks count from chunk
-     */
-    public abstract long getInhabitedTicks(Chunk c);
-    /** 
-     * Get tile entities map from chunk
-     */
-    public abstract Map<?, ?> getTileEntitiesForChunk(Chunk c);
-    /**
-     * Get X coordinate of tile entity
-     */
-    public abstract int getTileEntityX(Object te);
-    /**
-     * Get Y coordinate of tile entity
-     */
-    public abstract int getTileEntityY(Object te);
-    /**
-     * Get Z coordinate of tile entity
-     */
-    public abstract int getTileEntityZ(Object te);
-    /**
-     * Read tile entity NBT
-     */
-    public abstract Object readTileEntityNBT(Object te, World world);
-    /**
-     * Get field value from NBT compound
-     */
-    public abstract Object getFieldValue(Object nbt, String field);
-    /**
-     * Unload chunk no save needed
-     */
-    public abstract void unloadChunkNoSave(World w, Chunk c, int cx, int cz);
-    /**
-     * Get block name list
-     */
-    public abstract String[] getBlockNames();
-    /**
-     * Get biome name list
-     */
-    public abstract String[] getBiomeNames();
-    /**
-     * Get list of online players
-     */
-    public abstract Player[] getOnlinePlayers();
-    /**
-     * Get player health
-     */
-    public abstract double getHealth(Player p);
-    /**
-     * Get world border
-     */
-    public Polygon getWorldBorder(World world) { return null; }
-    /**
-     * Get world minY
-     */
-    public int getWorldMinY(World world) { return 0; }
-    /**
-     * Test if broken unloadChunk
-     */
-    public boolean isUnloadChunkBroken() { return false; }
-    /**
-     * Get skin URL for player
-     * @param player
-     */
-    public String getSkinURL(Player player) { return null; }
-    /**
-     * Get material map by block ID
-     */
-    public abstract BukkitMaterial[] getMaterialList();
-    /**
-     * Initialize block states (org.dynmap.blockstate.DynmapBlockState)
-     */
     public void initializeBlockStates() {
-        String[] blkname = getBlockNames();
-        BukkitMaterial[] blkmat = getMaterialList();
-        // Keep it simple for now - just assume 16 meta states for each
-        stateByID = new DynmapBlockState[16*blkname.length];
-        Arrays.fill(stateByID, DynmapBlockState.AIR);
-        for (int i = 0; i < blkname.length; i++) {
-        	if (blkname[i] == null) continue;
-        	String bn = blkname[i];
-        	if (bn.indexOf(':') < 0) {
-        		bn = "minecraft:" + bn;
-        	}
-            // Only do defined names, and not "air"
-            if (!bn.equals(DynmapBlockState.AIR_BLOCK)) {
-                BukkitMaterial mat = blkmat[i];
-                DynmapBlockState basebs = null;
-                for (int m = 0; m < 16; m++) {
-                	String sn = helper.getStateStringByCombinedId(i, m);
-                    DynmapBlockState bs = new DynmapBlockState(basebs, m, bn, sn, (mat != null) ? mat.name : null, i);
-                    if (basebs == null) basebs = bs;
-                    stateByID[(i << 4) + m] = bs;
-                    if (mat != null) {
-                    	if (mat.name.equals("AIR")) {
-                        	bs.setAir();
-                    	}
-                    	if (mat.name.equals("LEAVES")) {
-                        	bs.setLeaves();
-                    	}
-                    	if (mat.name.equals("WOOD")) {
-                        	bs.setLog();
-                    	}
-                    	if (mat.isSolid) {
-                    		bs.setSolid();
-                    	}
-                    }                    
-                }
-            }
+        var baseStates = new HashMap<String, DynmapBlockState>();
+        var builder = new DynmapBlockState.Builder();
+        for (BlockState state : Block.BLOCK_STATE_REGISTRY) {
+            String name = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+            DynmapBlockState base = baseStates.get(name);
+            String text = state.toString();
+            int bracket = text.indexOf('[');
+            String properties = bracket < 0 ? "" : text.substring(bracket + 1, text.lastIndexOf(']'));
+            builder.setBaseState(base).setStateIndex(base == null ? 0 : base.getStateCount())
+                .setBlockName(name).setStateName(properties).setAttenuatesLight(state.getLightDampening());
+            if (state.isSolid()) builder.setSolid();
+            if (state.isAir()) builder.setAir();
+            if (state.is(BlockTags.LOGS)) builder.setLog();
+            if (state.is(BlockTags.LEAVES)) builder.setLeaves();
+            if (!state.getFluidState().isEmpty() && !(state.getBlock() instanceof LiquidBlock)) builder.setWaterlogged();
+            DynmapBlockState mapped = builder.build();
+            if (state == state.getBlock().defaultBlockState()) mapped.setAsDefaultState();
+            baseStates.putIfAbsent(name, mapped);
         }
-        //for (int gidx = 0; gidx < DynmapBlockState.getGlobalIndexMax(); gidx++) {
-        //	DynmapBlockState bs = DynmapBlockState.getStateByGlobalIndex(gidx);
-        //	Log.verboseinfo(gidx + ":" + bs.toString() + ", gidx=" + bs.globalStateIndex + ", sidx=" + bs.stateIndex);
-        //}
     }
-    /**
-     * Create chunk cache for given chunks of given world
-     * @param dw - world
-     * @param chunks - chunk list
-     * @return cache
-     */
-    public MapChunkCache getChunkCache(BukkitWorld dw, List<DynmapChunk> chunks) {
-        AbstractMapChunkCache c = new MapChunkCacheClassic();
-        c.setChunks(dw, chunks);
-        return c;
+    public MapChunkCache getChunkCache(BukkitWorld world, List<DynmapChunk> chunks) {
+        var cache = new PaperMapChunkCache(gencache);
+        cache.setChunks(world, chunks);
+        return cache;
     }
-	public Object[] getBlockIDFieldFromSnapshot(ChunkSnapshot css) {
-		return null;
-	}
-	/**
-	 * Get biome base water multiplier
-	 */
-	public int getBiomeBaseWaterMult(Object bb) {
-		return -1;
-	}
-
-	public abstract String getStateStringByCombinedId(int blkid, int meta);
-	
-	// Send title/subtitle to user
-    public void sendTitleText(Player p, String title, String subtitle, int fadeInTicks, int stayTicks, int fadeOutTIcks) {
-    	// Do send message for old implementations
-    	if (p != null) {
-    		if (title != null) p.sendMessage(title);
-    		if (subtitle != null) p.sendMessage(subtitle);
-    	}
+    public Player[] getOnlinePlayers() { return Bukkit.getOnlinePlayers().toArray(Player[]::new); }
+    public double getHealth(Player player) { return player.getHealth(); }
+    public int getWorldMinY(World world) { return world.getMinHeight(); }
+    public String getSkinURL(Player player) {
+        var skin = player.getPlayerProfile().getTextures().getSkin();
+        return skin == null ? null : skin.toString();
     }
-    public boolean useGenericCache() {
-    	return false;
+    public void sendTitleText(Player player, String title, String subtitle, int in, int stay, int out) {
+        if (player != null) player.sendTitle(title, subtitle, in, stay, out);
+    }
+    public Polygon getWorldBorder(World world) {
+        if (world == null) return null;
+        try { return WorldBorderGeometry.from(world.getWorldBorder()); }
+        catch (LinkageError | RuntimeException unavailable) { return null; }
     }
 }

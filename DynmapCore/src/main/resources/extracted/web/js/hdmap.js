@@ -1,3 +1,4 @@
+// Modified for MCCMap: independent Paper fork (2026).
 var HDProjection = DynmapProjection.extend({
 	fromLocationToLatLng: function(location) {
 		var wtp = this.options.worldtomap;
@@ -28,7 +29,22 @@ var HDMapType = DynmapTileLayer.extend({
 		zoomReverse: true,
 	},
 	initialize: function(options) {
-		options.maxZoom = options.mapzoomin + options.mapzoomout;
+		var outMultiplier = Number(options.zoomoutmultiplier === undefined ? 1.5 : options.zoomoutmultiplier);
+		var inMultiplier = Number(options.zoominmultiplier === undefined ? 1.25 : options.zoominmultiplier);
+		if (!Number.isFinite(outMultiplier) || outMultiplier < 1 || outMultiplier > 16) outMultiplier = 1.5;
+		if (!Number.isFinite(inMultiplier) || inMultiplier < 1 || inMultiplier > 16) inMultiplier = 1.25;
+		options.minViewZoom = outMultiplier === 1 ? 0 : -Math.log2(outMultiplier);
+		options.minZoom = Math.floor(options.minViewZoom);
+		options.minNativeZoom = 0;
+		options.maxViewZoom = options.mapzoomin + options.mapzoomout + Math.log2(inMultiplier);
+        var pixels = Number(options.maxpixelsperblock === undefined ? 16 : options.maxpixelsperblock);
+        if (!Number.isFinite(pixels) || pixels < 0 || (pixels > 0 && pixels < 1) || pixels > 512) pixels = 16;
+        var scale = Number(options.scale);
+        if (pixels > 0 && Number.isFinite(scale) && scale > 0)
+            options.maxViewZoom = Math.min(options.maxViewZoom, options.mapzoomout + Math.log2(pixels / scale));
+		// Leaflet rounds tile levels before checking layer bounds. Keep these integral;
+		// the map applies the exact fractional display limits separately.
+		options.maxZoom = Math.ceil(options.maxViewZoom);
 		options.maxNativeZoom = options.mapzoomout;
 		options.tileSize = 128 << (options.tilescale || 0);
 
@@ -37,6 +53,22 @@ var HDMapType = DynmapTileLayer.extend({
 		L.Util.setOptions(this, options);
 		DynmapTileLayer.prototype.initialize.call(this, options);
 	},
+	updateBorderZoom: function(map) {
+        var border = this.options.world && this.options.world.worldborder;
+        if (!Array.isArray(border) || border.length < 3 || !map.getSize) return;
+        var size = map.getSize(), points = border.map(function(p) {
+            return this.projection.fromLocationToLatLng({x: p[0], y: this.options.world.sealevel || 64, z: p[1]});
+        }, this);
+        var xs = points.map(function(p) {return p.lng;}), ys = points.map(function(p) {return p.lat;});
+        var width = Math.max.apply(null, xs) - Math.min.apply(null, xs), height = Math.max.apply(null, ys) - Math.min.apply(null, ys);
+        var padding = Number(this.options.borderpadding);
+        if (!Number.isFinite(padding) || padding < 1 || padding > 4) padding = 1.1;
+        if (width <= 0 || height <= 0 || size.x <= 0 || size.y <= 0) return;
+        var minimum = Math.log2(Math.min(size.x / width, size.y / height) / padding);
+        this.options.minViewZoom = Math.max(-30, Math.min(this.options.maxViewZoom, minimum));
+        this.options.minZoom = Math.floor(this.options.minViewZoom);
+        map.options.minZoom = this.options.minViewZoom;
+    },
 	getTileName: function(coords) {
 		var info = this.getTileInfo(coords);
 		// Y is inverted for HD-map.

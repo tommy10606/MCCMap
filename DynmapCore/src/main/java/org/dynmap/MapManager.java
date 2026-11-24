@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import java.io.File;
@@ -17,9 +18,12 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -57,32 +61,43 @@ public class MapManager {
     private long timeslice_int = 0; /* In milliseconds */
     private int max_chunk_loads_per_tick = DEFAULT_CHUNKS_PER_TICK;
     private int parallelrendercnt = 0;
+    private double fullRenderOfflinePercent = 125, fullRenderOnlinePercent = 25;
+    private volatile int fullRenderPlayers = 1;
+    private int fullRenderOnlineWorkers = 1;
     private int progressinterval = 100;
     private int tileupdatedelay = 30;
     private int savependingperiod = 15 * 60; // every 15 minutes, by default
     private int defaulttilescale = 0;
     private boolean saverestorepending = true;
-    private boolean pauseupdaterenders = false;
+    private final Object checkpointWriteLock = new Object();
+    private ScheduledExecutorService checkpointWorker;
+    private volatile Set<MapTile> staleOwnedAtStop = Set.of();
+    private final Map<String,HashMap<String,Object>> stoppingJobs=new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean pauseupdaterenders = false;
     private boolean hideores = false;
     private boolean useBrightnessTable = false;
     private boolean usenormalpriority = false;
     private HashMap<String, String> blockalias = new HashMap<String, String>();
-    
+
     private boolean pausefullrenders = false;
 
     // TPS based render pauses
-    private double tpslimit_updaterenders = 18.0;
-    private double tpslimit_fullrenders = 18.0;
-    private double tpslimit_zoomout = 18.0;
-    private boolean tpspauseupdaterenders = false;
-    private boolean tpspausefullrenders = false;
-    private boolean tpspausezoomout = false;
+    private double tpslimit_updaterenders = 15.0;
+    private double tpslimit_fullrenders = 15.0;
+    private double tpslimit_zoomout = 15.0;
+    private volatile boolean tpspauseupdaterenders = false;
+    private volatile boolean tpspausefullrenders = false;
+    private volatile boolean tpspausezoomout = false;
+    private final TpsRenderGate updateTpsGate = new TpsRenderGate(), fullTpsGate = new TpsRenderGate(), zoomTpsGate = new TpsRenderGate();
+    private volatile long tpsBypassUntil;
+    private final RenderTpsNotifications updateTpsNotifications = new RenderTpsNotifications();
+    private final RenderTpsNotifications zoomTpsNotifications = new RenderTpsNotifications();
 
     // User enter/exit processing
     private static final int DEFAULT_ENTEREXIT_PERIOD = 1000;	// 1 second
     private static final int DEFAULT_TITLE_FADEIN = 10;	// 10 ticks = 1/2 second
     private static final int DEFAULT_TITLE_STAY = 70;	// 70 ticks = 3 1/2 second
-    private static final int DEFAULT_TITLE_FADEOUT = 20;	// 20 ticks = 1 second    
+    private static final int DEFAULT_TITLE_FADEOUT = 20;	// 20 ticks = 1 second
     private static final boolean DEFAULT_ENTEREXIT_USETITLE = true;
     private static final boolean DEFAULT_ENTEREPLACESEXITS = false;
     private int enterexitperiod = DEFAULT_ENTEREXIT_PERIOD;	// Enter/exit processing period
@@ -91,22 +106,22 @@ public class MapManager {
     private int titleFadeOut = DEFAULT_TITLE_FADEOUT;
     private boolean enterexitUseTitle = DEFAULT_ENTEREXIT_USETITLE;
     private boolean enterReplacesExits = DEFAULT_ENTEREPLACESEXITS;
-    
+
     private HashMap<UUID, HashSet<EnterExitMarker>> entersetstate = new HashMap<UUID, HashSet<EnterExitMarker>>();
-    
+
     private static class TextQueueRec {
-    	EnterExitText txt;
-    	boolean isEnter;
+        EnterExitText txt;
+        boolean isEnter;
     }
     private static class SendQueueRec {
-    	DynmapPlayer player;
-    	ArrayList<TextQueueRec> queue = new ArrayList<TextQueueRec>();
-    	int tickdelay;    	
-    };    
+        DynmapPlayer player;
+        ArrayList<TextQueueRec> queue = new ArrayList<TextQueueRec>();
+        int tickdelay;
+    };
     private HashMap<UUID, SendQueueRec> entersetsendqueue = new HashMap<UUID, SendQueueRec>();
 
     private boolean did_start = false;
-    
+
     private int zoomout_period = DEFAULT_ZOOMOUT_PERIOD;	/* Zoom-out tile processing period, in seconds */
     /* Which fullrenders are active */
     private HashMap<String, FullWorldRenderState> active_renders = new HashMap<String, FullWorldRenderState>();
@@ -115,16 +130,17 @@ public class MapManager {
     AtomicInteger chunk_caches_created = new AtomicInteger(0);
     AtomicInteger chunks_read[];
     AtomicLong chunks_read_times[];
-    
+
     /* lock for our data structures */
     public static final Object lock = new Object();
 
     public static MapManager mapman;    /* Our singleton */
     public HDMapManager hdmapman;
-    
+
     /* Thread pool for processing renders */
     private DynmapScheduledThreadPoolExecutor render_pool;
-    private static final int POOL_SIZE = 3;    
+    private ExecutorService fullRenderBoostPool;
+    private static final int POOL_SIZE = 3;
 
     /* Touch event queues */
     private static class TouchEvent {
@@ -142,7 +158,7 @@ public class MapManager {
             if((x != te.x) || (y != te.y) || (z != te.z) || (world.equals(te.world) == false))
                 return false;
             return true;
-        }        
+        }
     }
     private static class TouchVolumeEvent {
         int xmin, ymin, zmin;
@@ -153,9 +169,9 @@ public class MapManager {
     private ConcurrentHashMap<TouchEvent, Object> touch_events = new ConcurrentHashMap<TouchEvent, Object>();
     private LinkedList<TouchVolumeEvent> touch_volume_events = new LinkedList<TouchVolumeEvent>();
     private Object touch_lock = new Object();
-    
+
     private HashMap<String, MapStats> mapstats = new HashMap<String, MapStats>();
-    
+
     private static class MapStats {
         int loggedcnt;
         int renderedcnt;
@@ -164,8 +180,8 @@ public class MapManager {
     }
     /* synchronized using 'lock' */
     private HashMap<String, TriggerStats> trigstats = new HashMap<String, TriggerStats>();
-    
-    
+
+
     private static class TriggerStats {
         long callsmade;
         long callswithtiles;
@@ -178,11 +194,11 @@ public class MapManager {
             world = worldsLookup.get(DynmapWorld.normalizeWorldName(name));
         return world;
     }
-    
+
     public Collection<DynmapWorld> getWorlds() {
         return worlds;
     }
-    
+
     public Collection<String> getDisabledWorlds() {
         return disabled_worlds;
     }
@@ -192,9 +208,9 @@ public class MapManager {
     }
 
     public int getDefaultTileScale() {
-    	return defaulttilescale;
+        return defaulttilescale;
     }
-    
+
     private static class OurThreadFactory implements ThreadFactory {
         @Override
         public Thread newThread(Runnable r) {
@@ -202,11 +218,11 @@ public class MapManager {
             t.setDaemon(true);
             if(!mapman.usenormalpriority)
                 t.setPriority(Thread.MIN_PRIORITY);
-            t.setName("Dynmap Render Thread");
+            t.setName("MCCMap Render Thread");
             return t;
         }
     }
-    
+
     private class DynmapScheduledThreadPoolExecutor extends ScheduledThreadPoolExecutor {
         DynmapScheduledThreadPoolExecutor() {
             super(POOL_SIZE + parallelrendercnt);
@@ -233,15 +249,15 @@ public class MapManager {
                         try {
                             r.run();
                         } catch (Exception x) {
-                        	if (!(x instanceof InterruptedException)) {	// Avoid shutdown noise
-                        		Log.severe("Exception during render job: " + r);
-                        		x.printStackTrace();                        
-                        	}
+                            if (!(x instanceof InterruptedException)) {	// Avoid shutdown noise
+                                Log.severe("Exception during render job: " + r);
+                                x.printStackTrace();
+                            }
                         }
                     }
                 });
             } catch (RejectedExecutionException rxe) {  /* Pool shutdown - nominal for reload or unload */
-            }    
+            }
         }
         @Override
         public ScheduledFuture<?> schedule(final Runnable command, long delay, TimeUnit unit) {
@@ -251,10 +267,10 @@ public class MapManager {
                         try {
                             command.run();
                         } catch (Exception x) {
-                        	if (!(x instanceof InterruptedException)) {	// Avoid shutdown noise
-                        		Log.severe("Exception during render job: " + command);
-                        		x.printStackTrace();                    
-                        	}
+                            if (!(x instanceof InterruptedException)) {	// Avoid shutdown noise
+                                Log.severe("Exception during render job: " + command);
+                                x.printStackTrace();
+                            }
                         }
                     }
                 }, delay, unit);
@@ -266,22 +282,26 @@ public class MapManager {
     private static final String RENDERTYPE_FULLRENDER = "Full render";
     private static final String RENDERTYPE_RADIUSRENDER = "Radius render";
     private static final String RENDERTYPE_UPDATERENDER = "Update render";
-    
-    /* This always runs on render pool threads - no bukkit calls from here */ 
+
+    /* This always runs on render pool threads - no bukkit calls from here */
     private class FullWorldRenderState implements Runnable {
         DynmapWorld world;    /* Which world are we rendering */
-        DynmapLocation loc;        
+        DynmapLocation loc;
         int    map_index = -1;    /* Which map are we on */
         MapType map;
         TileFlags found = null;
         TileFlags rendered = null;
-        LinkedList<MapTile> renderQueue = null;
+        java.util.Deque<MapTile> renderQueue = null;
         MapTile tile0 = null;
         int rendercnt = 0;
         int skipcnt = 0;
         DynmapCommandSender sender;
         String player;
         long timeaccum;
+        private long refreshWorkNanos;
+        private boolean natural;
+        private FullRenderSpeedPolicy speedPolicy = new FullRenderSpeedPolicy(
+            parallelrendercnt, timeslice_int, fullRenderOfflinePercent, fullRenderOnlinePercent, fullRenderOnlineWorkers);
         HashSet<MapType> renderedmaps = new HashSet<MapType>();
         String activemaps;
         int activemapcnt;
@@ -295,11 +315,21 @@ public class MapManager {
         boolean resume = false;
         boolean resumeInitDone = false;
         boolean quiet = false;
+        private final RenderTpsNotifications tpsNotifications = new RenderTpsNotifications();
         String mapname;
         AtomicLong total_render_ns = new AtomicLong(0L);
         AtomicInteger rendercalls = new AtomicInteger(0);
         long lastPendingSaveTS = 0; // Timestamp of last pending state save (msec)
-        HashSet<String> storedTileIds = new HashSet<>();
+        private final Map<String,TileFlags> storedTileIds = new java.util.concurrent.ConcurrentHashMap<>();
+        private final Set<MapTile> checkpointInFlight = new java.util.LinkedHashSet<>();
+        private volatile boolean mapTransition;
+        private HashMap<String,Object> lastSafeCheckpoint;
+        private int resumeScanMap;
+        private org.dynmap.storage.filetree.TileScanCursor resumeScanCursor = new org.dynmap.storage.filetree.TileScanCursor();
+        private RenderInventory inventory = new RenderInventory();
+        private final RenderProgress progress = new RenderProgress();
+        private volatile MissingTileCheck.Snapshot inventorySnapshot;
+        private volatile boolean inventoryRequested;
 
         /* Full world, all maps render */
         FullWorldRenderState(DynmapWorld dworld, DynmapLocation l, DynmapCommandSender sender, String mapname, boolean updaterender, boolean resume) {
@@ -312,15 +342,16 @@ public class MapManager {
                 rendertype = RENDERTYPE_FULLRENDER;
             }
             this.resume = resume;
+            lastSafeCheckpoint=saveState();
         }
-        
+
         /* Full world, all maps render, with optional render radius */
         FullWorldRenderState(DynmapWorld dworld, DynmapLocation l, DynmapCommandSender sender, String mapname, int radius) {
             world = dworld;
             loc = l;
             found = new TileFlags();
             rendered = new TileFlags();
-            renderQueue = new LinkedList<MapTile>();
+            renderQueue = new java.util.concurrent.ConcurrentLinkedDeque<MapTile>();
             this.sender = sender;
             if(sender instanceof DynmapPlayer)
                 this.player = ((DynmapPlayer)sender).getName();
@@ -339,6 +370,7 @@ public class MapManager {
                 rendertype = RENDERTYPE_RADIUSRENDER;
             }
             this.mapname = mapname;
+            lastSafeCheckpoint=saveState();
         }
 
         /* Single tile render - used for incremental renders */
@@ -358,6 +390,10 @@ public class MapManager {
             loc.x = (int)n.getDouble("locX", 0.0);
             loc.y = (int)n.getDouble("locY", 0.0);
             loc.z = (int)n.getDouble("locZ", 0.0);
+            resume=n.getBoolean("resume",false);resumeInitDone=n.getBoolean("resume-init-done",false);resumeScanMap=n.getInteger("resume-scan-map",0);
+            var resumeCursor=n.getNode("resume-scan-cursor");if(resumeCursor!=null)resumeScanCursor=new org.dynmap.storage.filetree.TileScanCursor(resumeCursor);
+            var existing=n.getNode("resume-existing");if(existing!=null)for(String key:existing.keySet()){var flags=new TileFlags();flags.load(existing.getStrings(key,List.of()));storedTileIds.put(key,flags);}
+            lastSafeCheckpoint=new HashMap<>(n.entries);
             map_index = n.getInteger("mapindex", -1);
             if(map_index >= 0) {
                 String m = n.getString("map","");
@@ -378,7 +414,7 @@ public class MapManager {
             sl = n.getStrings("rendered", null);
             if(sl != null)
                 rendered.load(sl);
-            renderQueue = new LinkedList<MapTile>();
+            renderQueue = new java.util.concurrent.ConcurrentLinkedDeque<MapTile>();
             List<ConfigurationNode> tl = n.getNodes("queue");
             if(tl != null) {
                 for(ConfigurationNode cn : tl) {
@@ -389,7 +425,9 @@ public class MapManager {
                 }
             }
             rendercnt = n.getInteger("count", 0);
-            timeaccum = n.getInteger("timeaccum", 0);
+            try { inventory = new RenderInventory(n.getNode("progress-inventory")); }
+            catch (java.io.IOException | RuntimeException invalid) { inventory = new RenderInventory(); }
+            timeaccum = (long)n.getLong("timeaccum", 0);
             renderedmaps = new HashSet<MapType>();
             sl = n.getStrings("renderedmaps", null);
             if(sl != null) {
@@ -421,10 +459,14 @@ public class MapManager {
                 sender = core.getServer().getPlayer(player);
             }
         }
-        
-        public HashMap<String,Object> saveState() {
+
+        public HashMap<String,Object> saveState() { synchronized(lock) {
+            if(mapTransition)return lastSafeCheckpoint;
+            HashMap<String,Object> snapshot=buildCheckpointState();lastSafeCheckpoint=snapshot;return snapshot;
+        }}
+        private HashMap<String,Object> buildCheckpointState() {
             HashMap<String,Object> v = new HashMap<String,Object>();
-            
+
             v.put("world", world.getName());
             v.put("locX", loc.x);
             v.put("locY", loc.y);
@@ -440,13 +482,15 @@ public class MapManager {
             v.put("found", found.save());
             v.put("rendered", rendered.save());
             LinkedList<ConfigurationNode> queue = new LinkedList<ConfigurationNode>();
-            for(MapTile tq : renderQueue) {
+            var checkpointTiles=new java.util.LinkedHashSet<MapTile>(renderQueue);checkpointTiles.addAll(checkpointInFlight);
+            for(MapTile tq : checkpointTiles) {
                 ConfigurationNode n = tq.saveTile();
                 if(n != null)
                     queue.add(n);
             }
             v.put("queue", queue);
             v.put("count", rendercnt);
+            v.put("progress-inventory", inventory.save());
             v.put("timeaccum", timeaccum);
             LinkedList<String> rmaps = new LinkedList<String>();
             for(MapType mt : renderedmaps) {
@@ -463,14 +507,17 @@ public class MapManager {
             if(mapname != null)
                 v.put("mapname", mapname);
             v.put("player", player);
+            v.put("resume",resume);v.put("resume-init-done",resumeInitDone);v.put("resume-scan-map",resumeScanMap);v.put("resume-scan-cursor",resumeScanCursor.save());
+            var existing=new java.util.LinkedHashMap<String,Object>();storedTileIds.forEach((name,flags)->existing.put(name,flags.save()));v.put("resume-existing",existing);
             return v;
         }
-        
+
         public String toString() {
             return "world=" + world.getName() + ", map=" + map;
         }
-        
+
         public void cleanup() {
+            if (natural && naturalRenders != null && !shutdown) naturalRenders.finished(this);
             if(tile0 == null) {
                 synchronized(lock) {
                     String wn = world.getName();
@@ -481,59 +528,86 @@ public class MapManager {
                 }
             }
             else {
-                tileQueue.done(tile0);            	
+                tileQueue.done(tile0);
+                var refresh = staleTileRefresh;
+                if (refresh != null && tile0 instanceof org.dynmap.hdmap.HDMapTile tile)
+                    refresh.recordFinished(tile, refreshWorkNanos,
+                        java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeslice_int), parallelrendercnt);
             }
         }
-        
+
         public void saveRefresh() {
             if (saverestorepending && world.isLoaded() && (savependingperiod > 0)) {
                 savePending(this.world, true);    // Save the pending data for the given world
             }
         }
-        
+
         public void run() {
+            try { runWork(); }
+            catch (RuntimeException failure) {
+                if (!natural) throw failure;
+                var automatic = naturalRenders;
+                if (automatic != null) automatic.failed(this);
+                Log.severe("Natural render stopped for '" + world.getName() + "'; use /mccmap naturalrender resume after correcting the error", failure);
+            }
+        }
+
+        private void makeNatural() {
+            natural = true; quiet = true; sender = null; player = ""; rendertype = "Natural render";
+            speedPolicy = new FullRenderSpeedPolicy(parallelrendercnt, timeslice_int,
+                fullRenderOfflinePercent,
+                FullRenderSpeedPolicy.percent(core.configuration.getDouble("natural-render/players-online-percent", 10), 10), fullRenderOnlineWorkers);
+        }
+
+        private boolean fullPass() { return natural || rendertype.equals(RENDERTYPE_FULLRENDER); }
+
+        private void runWork() {
             long tstart = System.currentTimeMillis();
             MapTile tile = null;
             List<MapTile> tileset = null;
-            
+
             if(cancelled) {
-            	cleanup();
-            	if (!shutdown) {
-            	    saveRefresh();
-            	}
-            	return;
+                cleanup();
+                if (!shutdown) {
+                    saveRefresh();
+                }
+                return;
+            }
+            if (natural && naturalPauseReason() != null) {
+                progress.reset(); scheduleDelayedJob(this, 1000); return;
             }
             // If doing resume, load existing tile IDs here (constructor was stupid, and caused timeouts for non-trivial maps - need to check PRs better....
             if (resume && (!resumeInitDone)) { // if resume render AND init not completed
                 sendMessage(String.format("Scanning map to find existing tiles for resume..."));
-                final MapStorage ms = world.getMapStorage();
-                ms.enumMapBaseTiles(world, map, new MapStorageBaseTileEnumCB() {
-                    @Override
-                    public void tileFound(MapStorageTile tile, MapType.ImageEncoding enc) {
-                        String tileId = String.format("%s_%s_%d_%d", tile.world.getName(), tile.map.getName(), tile.x, tile.y);
-                        //sender.sendMessage("Tile found: " + tileId);
-                        storedTileIds.add(tileId);
+                while(resumeScanMap<world.maps.size()) {
+                    var scanMap=world.maps.get(resumeScanMap);boolean done;
+                    if (natural && !scanMap.getName().equals(mapname)) {
+                        synchronized(lock) { resumeScanMap++; resumeScanCursor = new org.dynmap.storage.filetree.TileScanCursor(); }
+                        continue;
                     }
-                }, new MapStorageTileSearchEndCB() {
-                    @Override
-                    public void searchEnded() {
-                    	
-                    }
-                });
+                    try {done=((org.dynmap.storage.filetree.FileTreeMapStorage)world.getMapStorage()).scanTiles(world,scanMap,resumeScanCursor,4096,t->{if(t.zoom==0&&(!natural||NaturalRenderLedger.reusable(t)))synchronized(lock){storedTileIds.computeIfAbsent(scanMap.getName(),key->new TileFlags()).setFlag(t.x,t.y,true);}});}
+                    catch(java.io.IOException failure){throw new IllegalStateException("Resume scan failed",failure);}
+                    if(done)synchronized(lock){resumeScanMap++;resumeScanCursor=new org.dynmap.storage.filetree.TileScanCursor();}
+                    if(System.currentTimeMillis()-lastPendingSaveTS>=savependingperiod*1000L){savePending(world,true);lastPendingSaveTS=System.currentTimeMillis();}
+                    if(cancelled||Thread.currentThread().isInterrupted())return;
+                    if (natural && naturalPauseReason() != null) { progress.reset(); scheduleDelayedJob(this, 1000); return; }
+                }
                 sendMessage(String.format("Scan complete - starting render"));
                 resumeInitDone = true;	// Only due on first run
             }
-            
+
             if(tile0 == null) {    /* Not single tile render */
                 if (saverestorepending && world.isLoaded() && (savependingperiod > 0) && ((lastPendingSaveTS + (1000 *savependingperiod))  < System.currentTimeMillis())) {
                     savePending(this.world, true);    // Save the pending data for the given world
                     lastPendingSaveTS = System.currentTimeMillis();
                 }
-                if(pausefullrenders || tpspausefullrenders) {    /* Update renders are paused? */
+                if(pausefullrenders || tpspausefullrenders || storagePauseReason() != null) {
+                    progress.reset();
                     scheduleDelayedJob(this, 20*5); /* Delay 5 seconds and retry */
                     return;
                 }
                 else if(world.isLoaded() == false) {    /* Update renders are paused? */
+                    progress.reset();
                     if(!pausedforworld) {
                         pausedforworld = true;
                         Log.info("Paused " + rendertype + " for world '" + world.getName() + "' - world unloaded");
@@ -545,8 +619,29 @@ public class MapManager {
                     pausedforworld = false;
                     Log.info("Unpaused " + rendertype + " for world '" + world.getName() + "' - world reloaded");
                 }
+                long pacingDelay = speedPolicy.remainingDelayNanos(System.nanoTime(), fullRenderPlayers > 0);
+                if (inventory.done()) progress.sample(rendercnt, System.nanoTime() / 1000000, fullRenderPlayers > 0);
+                if (pacingDelay > 0) {
+                    // Recheck presence while waiting, without occupying a render worker.
+                    scheduleDelayedJob(this, Math.max(1, Math.min(1000, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(pacingDelay))));
+                    return;
+                }
                 /* If render queue is empty, start next map */
                 if(renderQueue.isEmpty()) {
+                    // Natural passes also seed disconnected generated terrain, at the same
+                    // paced rate. Keep the bitmap instead of enqueuing a whole world at once.
+                    if (natural && map_index >= 0 && map instanceof org.dynmap.hdmap.HDMap hd) {
+                        synchronized(lock) {
+                            var coordinate = inventory.nextUnseenSeed(found);
+                            if (coordinate != null) {
+                                found.setFlag(coordinate.x, coordinate.y, true);
+                                renderQueue.add(new org.dynmap.hdmap.HDMapTile(world, hd.getPerspective(), coordinate.x, coordinate.y, hd.getBoostZoom(), hd.getTileScale()));
+                            }
+                            if (!renderQueue.isEmpty() || inventory.hasSeeds()) { scheduleDelayedJob(this, 0); return; }
+                        }
+                    }
+                    synchronized(lock){mapTransition=true;}
+                    try {
                     if(map_index >= 0) { /* Finished a map? */
                         double msecpertile = (double)timeaccum / (double)((rendercnt>0)?rendercnt:1)/(double)activemapcnt;
                         int rndcalls = rendercalls.get();
@@ -570,7 +665,7 @@ public class MapManager {
                         }
                         skipcnt = 0;
                         /* Now, if fullrender, use the render bitmap to purge obsolete tiles */
-                        if(rendertype.equals(RENDERTYPE_FULLRENDER)) {
+                        if(fullPass() && !natural) {
                             if(activemapcnt == 1) {
                                 map.purgeOldTiles(world, rendered);
                             }
@@ -580,7 +675,11 @@ public class MapManager {
                                 }
                             }
                         }
-                    }                	
+                        if (fullPass() && naturalRenders != null) {
+                            var completed = mapname == null ? map.getMapsSharingRender(world) : List.of(map);
+                            naturalRenders.completed(this, completed);
+                        }
+                    }
                     found.clear();
                     rendered.clear();
                     rendercnt = 0;
@@ -603,12 +702,24 @@ public class MapManager {
                         }
                     }
                     if(map_index >= world.maps.size()) {    /* Last one done? */
-                        sendMessage(rendertype + " of '" + world.getName() + "' finished.");
+                        sendMessage(rendertype + " of '" + world.getName() + "' finished - 100%, 0s remaining (base render; cleanup/zoom repairs may continue).");
                         cleanup();
                         saveRefresh();
+                        if(fullPass() && !natural && missingTileCheck != null) {
+                            // Include completed maps restored from a persisted full render as well.
+                            var completed=world.maps.stream().filter(mt -> !mt.isReadOnly() &&
+                                (mapname == null ? renderedmaps.contains(mt) : mt.getName().equals(mapname)))
+                                .filter(org.dynmap.hdmap.HDMap.class::isInstance)
+                                .map(org.dynmap.hdmap.HDMap.class::cast).toList();
+                            missingTileCheck.afterFullRender(world, completed);
+                        }
                         return;
                     }
                     map = world.maps.get(map_index);
+                    inventory = new RenderInventory();
+                    inventorySnapshot = null;
+                    inventoryRequested = false;
+                    progress.reset();
                     List<String> activemaplist = map.getMapNamesSharingRender(world);
                     /* Build active map list */
                     activemaps = "";
@@ -657,29 +768,36 @@ public class MapManager {
                             }
                         }
                     }
+                    } finally {synchronized(lock){mapTransition=false;}}
                 }
-                if(parallelrendercnt > 1) { /* Doing parallel renders? */
+                if (!prepareProgressInventory()) {
+                    scheduleDelayedJob(this, 1);
+                    return;
+                }
+                int batchSize = speedPolicy.nextBatchSize(fullRenderPlayers > 0);
+                if(batchSize > 1) { /* Doing parallel renders? */
                     tileset = new ArrayList<MapTile>();
-                    for(int i = 0; i < parallelrendercnt; i++) {
-                        tile = renderQueue.pollFirst();
+                    for(int i = 0; i < batchSize; i++) {
+                        tile = takeCheckpointTile();
                         if(tile != null)
                             tileset.add(tile);
                     }
                 }
                 else {
-                    tile = renderQueue.pollFirst();
+                    tile = takeCheckpointTile();
                 }
             }
             else {    /* Else, single tile render */
-                if(pauseupdaterenders || tpspauseupdaterenders) {
+                if(pauseupdaterenders || tpspauseupdaterenders || storagePauseReason() != null) {
                     scheduleDelayedJob(this, 5*20); /* Retry after 5 seconds */
                     return;
                 }
                 tile = tile0;
             }
 
+            long batchStarted = System.nanoTime();
             boolean notdone = true;
-            
+
             if(tileset != null) {
                 long save_timeaccum = timeaccum;
                 List<Future<Boolean>> rslt = new ArrayList<Future<Boolean>>();
@@ -688,13 +806,15 @@ public class MapManager {
                     final MapTile mt = tileset.get(i);
                     if((mapman != null) && (mapman.render_pool != null)) {
                         final long ts = tstart;
-                        Future<Boolean> future = mapman.render_pool.submit(new Callable<Boolean>() {
+                        ExecutorService executor = i >= Math.max(1, parallelrendercnt) && mapman.fullRenderBoostPool != null
+                            ? mapman.fullRenderBoostPool : mapman.render_pool;
+                        Future<Boolean> future = executor.submit(new Callable<Boolean>() {
                             public Boolean call() {
                                 return processTile(mt, ts, cnt);
                             }
                         });
                         rslt.add(future);
-                        
+
                     }
                 }
                 /* Now, do our render (first one) */
@@ -730,16 +850,22 @@ public class MapManager {
                     renderQueue.push(tile);
                 }
             }
-            
+
+            if (storagePauseReason() != null) {
+                if (tile0 == null) {
+                    if (tileset != null) renderQueue.addAll(tileset);
+                    else if (tile != null) renderQueue.addFirst(tile);
+                }
+                synchronized(lock){checkpointInFlight.clear();}
+                scheduleDelayedJob(this, 5000);
+                return;
+            }
+            synchronized(lock){checkpointInFlight.clear();}
             if(notdone) {
                 if(tile0 == null) {    /* fullrender */
-                    long tend = System.currentTimeMillis();
-                    if(timeslice_int > (tend-tstart)) { /* We were fast enough */
-                        scheduleDelayedJob(this, timeslice_int - (tend-tstart));
-                    }
-                    else {  /* Schedule to run ASAP */
-                        scheduleDelayedJob(this, 0);
-                    }
+                    long finished = System.nanoTime();
+                    speedPolicy.recordBatch(finished - batchStarted, tileset == null ? 1 : tileset.size(), finished);
+                    scheduleDelayedJob(this, 0);
                 }
                 else {
                     cleanup();
@@ -748,10 +874,29 @@ public class MapManager {
             else {
                 //cleanup();
                 shutdownRender();
+                if (tile0 != null) cleanup();
             }
         }
 
+        private MapTile takeCheckpointTile(){synchronized(lock){MapTile tile=renderQueue.pollFirst();if(tile!=null)checkpointInFlight.add(tile);return tile;}}
+
         private boolean processTile(MapTile tile, long tstart, int parallelcnt) {
+            var refresh = staleTileRefresh;
+            var backgroundTile = tile0 != null && tile instanceof org.dynmap.hdmap.HDMapTile hd ? hd : null;
+            long started = System.nanoTime();
+            if (refresh != null && backgroundTile != null) refresh.recordStarted(backgroundTile);
+            boolean threw = true;
+            try {
+                boolean result = processTileWork(tile, tstart, parallelcnt);
+                threw = false;
+                return result;
+            } finally {
+                if (backgroundTile != null) refreshWorkNanos += System.nanoTime() - started;
+                if (threw && tile0 != null) cleanup();
+            }
+        }
+
+        private boolean processTileWork(MapTile tile, long tstart, int parallelcnt) {
             /* Get list of chunks required for tile */
             List<DynmapChunk> requiredChunks = tile.getRequiredChunks();
             /* If we are doing radius limit render, see if any are inside limits */
@@ -766,8 +911,8 @@ public class MapManager {
                 if(!good) requiredChunks = Collections.emptyList();
             }
             /* Fetch chunk cache from server thread */
-            MapChunkCache cache = core.getServer().createMapChunkCache(world, requiredChunks, tile.isBlockTypeDataNeeded(), 
-                                                      tile.isHightestBlockYDataNeeded(), tile.isBiomeDataNeeded(), 
+            MapChunkCache cache = core.getServer().createMapChunkCache(world, requiredChunks, tile.isBlockTypeDataNeeded(),
+                                                      tile.isHightestBlockYDataNeeded(), tile.isBiomeDataNeeded(),
                                                       tile.isRawBiomeDataNeeded());
             if(cache == null) {
                 /* If world unloaded, don't cancel */
@@ -785,8 +930,8 @@ public class MapManager {
 
             boolean skipTile = false;
             if (resume) {
-                String tileId = String.format("%s_%s_%d_%d", tile.world.getName(), map.getName(), tile.tileOrdinalX(), tile.tileOrdinalY());
-                skipTile = storedTileIds.contains(tileId);
+                var flags=storedTileIds.get(map.getName());
+                skipTile = flags!=null&&flags.getFlag(tile.tileOrdinalX(),tile.tileOrdinalY());
             }
 
             if(tile0 != null) {    /* Single tile? */
@@ -799,8 +944,8 @@ public class MapManager {
                 }
             }
             else {
-        		/* Remove tile from tile queue, since we're processing it already */
-            	tileQueue.remove(tile);
+                /* Remove tile from tile queue, since we're processing it already */
+                tileQueue.remove(tile);
                 /* Switch to not checking if rendered tile is blank - breaks us on skylands, where tiles can be nominally blank - just work off chunk cache empty */
                 if (cache.isEmpty() == false) {
                     boolean upd;
@@ -831,25 +976,8 @@ public class MapManager {
                         rendercnt++;
                         timeaccum += System.currentTimeMillis() - tstart;
                         if (((rendercnt % progressinterval) == 0) && (!quiet)) {
-                            int rndcalls = rendercalls.get();
-                            if (rndcalls == 0) rndcalls = 1;
-                            double rendtime = total_render_ns.doubleValue() * 0.000001 / rndcalls;
-                            double msecpertile = (double)timeaccum / (double)rendercnt / (double)activemapcnt;
-                            if(activemapcnt > 1) {
-                                if (skipcnt > 1)
-                                    sendMessage(String.format("%s of maps [%s] of '%s' in progress - %d tiles rendered each (%.2f msec/map-tile, %.2f msec per render) (%d tiles skipped)",
-                                            rendertype, activemaps, world.getName(), rendercnt, msecpertile, rendtime, skipcnt));
-                                else
-                                    sendMessage(String.format("%s of maps [%s] of '%s' in progress - %d tiles rendered each (%.2f msec/map-tile, %.2f msec per render)",
-                                            rendertype, activemaps, world.getName(), rendercnt, msecpertile, rendtime));
-                            } else {
-                                if (skipcnt > 1)
-                                    sendMessage(String.format("%s of map '%s' of '%s' in progress - %d tiles rendered (%.2f msec/tile, %.2f msec per render) (%d tiles skipped)",
-                                            rendertype, activemaps, world.getName(), rendercnt, msecpertile, rendtime, skipcnt));
-                                else
-                                    sendMessage(String.format("%s of map '%s' of '%s' in progress - %d tiles rendered (%.2f msec/tile, %.2f msec per render)",
-                                            rendertype, activemaps, world.getName(), rendercnt, msecpertile, rendtime));
-                            }
+                            progress.sample(rendercnt, System.nanoTime() / 1000000, fullRenderPlayers > 0);
+                            sendMessage(progressSummary());
                             skipcnt = 0;
                         }
                     }
@@ -857,13 +985,64 @@ public class MapManager {
             }
             /* And unload what we loaded */
             cache.unloadChunks();
-            
+
             return true;
         }
-        
+
+        private boolean prepareProgressInventory() {
+            if (natural) inventory.retainSeeds();
+            if (inventory.done()) return true;
+            if (updaterender || !(map instanceof org.dynmap.hdmap.HDMap hd)) {
+                inventory.unavailable();
+                return true;
+            }
+            if (!inventoryRequested) {
+                inventoryRequested = true;
+                if (!quiet) sendMessage(rendertype + " of '" + world.getName() + "' maps [" + activemaps
+                    + "]: counting generated terrain for progress estimate...");
+                try {
+                    core.getServer().scheduleServerTask(() -> {
+                        try {
+                            inventorySnapshot = core.getServer().getRenderCheckSnapshot(world);
+                            if (inventorySnapshot == null) inventory.unavailable();
+                        } catch (RuntimeException unavailable) { inventory.unavailable(); }
+                    }, 0);
+                } catch (RuntimeException unavailable) {
+                    inventory.unavailable();
+                    return true;
+                }
+                return false;
+            }
+            var snapshot = inventorySnapshot;
+            if (snapshot == null) return inventory.done();
+            try {
+                boolean done = inventory.step(world, hd, snapshot, cxmin, cxmax, czmin, czmax);
+                if (done) progress.reset();
+                return done;
+            } catch (java.io.InterruptedIOException stopped) {
+                return false;
+            } catch (java.io.IOException | RuntimeException unavailable) {
+                Log.warning("Render progress estimate unavailable for '" + world.getName() + "'; rendering continues");
+                inventory.unavailable();
+                return true;
+            }
+        }
+
+        private String progressSummary() {
+            String pause = pausefullrenders ? "manual" : tpspausefullrenders ? "low TPS"
+                : !world.isLoaded() ? "world unloaded" : storagePauseReason();
+            if (natural && pause == null) pause = naturalPauseReason();
+            String prefix = rendertype + " of '" + world.getName() + "' maps [" + activemaps + "]: ";
+            if (map == null) return rendertype + " of '" + world.getName() + "': preparing first map; ETA "
+                + (pause == null ? "calculating" : "paused (" + pause + ")");
+            if (!inventory.done() && pause != null) return prefix + "counting terrain; ETA paused (" + pause + ")";
+            if (!inventory.done()) return prefix + "counting terrain (" + inventory.phase() + "); ETA calculating";
+            return prefix + progress.describe(rendercnt, inventory.total(), System.nanoTime() / 1000000, pause);
+        }
+
         public void cancelRender() {
-        	cancelled = true;
-        	storedTileIds.clear();
+            cancelled = true;
+            storedTileIds.clear();
         }
 
         public void shutdownRender() {
@@ -883,14 +1062,14 @@ public class MapManager {
     private class ProcessOBJExport implements Runnable {
         private OBJExport exp;
         private DynmapCommandSender sender;
-        
+
         public void run() {
             exp.processExport(sender);
         }
     }
-    
+
     private class CheckWorldTimes implements Runnable {
-    	HashMap<String, Polygon> last_worldborder = new HashMap<String, Polygon>();
+        HashMap<String, Polygon> last_worldborder = new HashMap<String, Polygon>();
         public void run() {
             Future<Integer> f = core.getServer().callSyncMethod(new Callable<Integer>() {
                 public Integer call() throws Exception {
@@ -903,15 +1082,15 @@ public class MapManager {
                             boolean isday = new_servertime >= 0 && new_servertime < 13700;
                             w.servertime = new_servertime;
                             if(wasday != isday) {
-                                pushUpdate(w, new Client.DayNight(isday));            
+                                pushUpdate(w, new Client.DayNight(isday));
                             }
                             // Check world border
-                            Polygon wb = w.getWorldBorder();
+                            Polygon wb = w.showborder && core.configuration.getString("world-border/source", "worldborder").equalsIgnoreCase("vanilla")
+                                ? w.getWorldBorder() : null;
                             Polygon oldwb = last_worldborder.get(w.getName());
-                            if (((wb == null) && (oldwb == null)) ||
-                            		wb.equals(oldwb)) {	// No change
-                            }
-                            else { 
+                            if (!java.util.Objects.equals(wb, oldwb)) {
+                                if (wb == null) last_worldborder.remove(w.getName());
+                                else last_worldborder.put(w.getName(), wb);
                                 core.listenerManager.processWorldEvent(EventType.WORLD_SPAWN_CHANGE, w);
                             }
                         }
@@ -940,10 +1119,10 @@ public class MapManager {
             scheduleDelayedJob(this, 5000);
         }
     }
-    
+
     private class DoZoomOutProcessing implements Runnable {
         public void run() {
-            if (!tpspausezoomout) {
+            if (!tpspausezoomout && storagePauseReason() == null) {
                 Debug.debug("DoZoomOutProcessing started");
                 ArrayList<DynmapWorld> wl = new ArrayList<DynmapWorld>(worlds);
                 for(DynmapWorld w : wl) {
@@ -957,10 +1136,14 @@ public class MapManager {
             }
         }
     }
-    
+
     private class DoTouchProcessing implements Runnable {
         public void run() {
             processTouchEvents();
+            if (storagePauseReason() != null) {
+                scheduleDelayedJob(this, 1000);
+                return;
+            }
             /* Try to keep update queue above accelerate level, if we have enough */
             int cnt = 2*tileQueue.accelDequeueThresh;
             if(cnt < 100) cnt = 100;
@@ -971,99 +1154,99 @@ public class MapManager {
             scheduleDelayedJob(this, 1000); /* Once per second */
         }
     }
-    
+
     private void sendPlayerEnterExit(DynmapPlayer player, EnterExitText txt) {
-		core.getServer().scheduleServerTask(new Runnable() {
-			public void run() {
-				if (enterexitUseTitle) {
-					player.sendTitleText(txt.title, txt.subtitle, titleFadeIn, titleStay, titleFadeOut);
-				}
-				else {
-					if (txt.title != null) player.sendMessage(txt.title);
-					if (txt.subtitle != null) player.sendMessage(txt.subtitle);
-				}
-			}
-		}, 0);    	
+        core.getServer().scheduleServerTask(new Runnable() {
+            public void run() {
+                if (enterexitUseTitle) {
+                    player.sendTitleText(txt.title, txt.subtitle, titleFadeIn, titleStay, titleFadeOut);
+                }
+                else {
+                    if (txt.title != null) player.sendMessage(txt.title);
+                    if (txt.subtitle != null) player.sendMessage(txt.subtitle);
+                }
+            }
+        }, 0);
     }
-    
+
     private void enqueueMessage(UUID uuid, DynmapPlayer player, EnterExitText txt, boolean isEnter) {
-    	SendQueueRec rec = entersetsendqueue.get(uuid);
-    	if (rec == null) {
-    		rec = new SendQueueRec();
-    		rec.player = player;
-    		rec.tickdelay = 0;
-    		entersetsendqueue.put(uuid, rec);
-    	}
-    	TextQueueRec txtrec = new TextQueueRec();
-    	txtrec.isEnter = isEnter;
-    	txtrec.txt = txt;
-    	rec.queue.add(txtrec);
-    	// If enter replaces exits, and we just added enter, purge exits
-    	if (enterReplacesExits && isEnter) {
-    		ArrayList<TextQueueRec> newlst = new ArrayList<TextQueueRec>();
-    		for (TextQueueRec r : rec.queue) {
-    			if (r.isEnter) newlst.add(r);	// Keep the enter records
-    		}
-    		rec.queue = newlst;
-    	}
+        SendQueueRec rec = entersetsendqueue.get(uuid);
+        if (rec == null) {
+            rec = new SendQueueRec();
+            rec.player = player;
+            rec.tickdelay = 0;
+            entersetsendqueue.put(uuid, rec);
+        }
+        TextQueueRec txtrec = new TextQueueRec();
+        txtrec.isEnter = isEnter;
+        txtrec.txt = txt;
+        rec.queue.add(txtrec);
+        // If enter replaces exits, and we just added enter, purge exits
+        if (enterReplacesExits && isEnter) {
+            ArrayList<TextQueueRec> newlst = new ArrayList<TextQueueRec>();
+            for (TextQueueRec r : rec.queue) {
+                if (r.isEnter) newlst.add(r);	// Keep the enter records
+            }
+            rec.queue = newlst;
+        }
     }
-    
+
     private class DoUserMoveProcessing implements Runnable {
         public void run() {
             HashMap<UUID, HashSet<EnterExitMarker>> newstate = new HashMap<UUID, HashSet<EnterExitMarker>>();
-        	DynmapPlayer[] pl = core.playerList.getOnlinePlayers();
-        	for (DynmapPlayer player : pl) {
-        		if (player == null) continue;
-        		UUID puuid = player.getUUID();
-        		HashSet<EnterExitMarker> newset = new HashSet<EnterExitMarker>();
-        		DynmapLocation dl = player.getLocation();
-        		if (dl != null) {
-        			MarkerAPIImpl.getEnteredMarkers(dl.world, dl.x, dl.y, dl.z, newset);
-        		}
-        		HashSet<EnterExitMarker> oldset = entersetstate.get(puuid);
-        		// See which we just left
-        		if (oldset != null) {
-            		for (EnterExitMarker m : oldset) {
-            			EnterExitText txt = m.getFarewellText();
-            			if ((txt != null) && (newset.contains(m) == false)) {
-            				enqueueMessage(puuid, player, txt, false);
-            			}
-            		}        			
-        		}
-        		// See which we just entered
-        		for (EnterExitMarker m : newset) {
-        			EnterExitText txt = m.getGreetingText();
-        			if ((txt != null) && ((oldset == null) || (oldset.contains(m) == false))) {
-        				enqueueMessage(puuid, player, txt, true);
-        			}
-        		}
-        		newstate.put(puuid, newset);
-        	}
-        	entersetstate = newstate;	// Replace old with new
-        	
-        	// Go through queues - send pending messages
-        	List<UUID> keys = new ArrayList<UUID>(entersetsendqueue.keySet());
-        	for (UUID id : keys) {
-        		SendQueueRec rec = entersetsendqueue.get(id);
-        		// Check delay - count down if needed
-        		if (rec.tickdelay > enterexitperiod) {
-        			rec.tickdelay -= enterexitperiod;
-        			continue;
-        		}
-        		rec.tickdelay = 0;
-        		// If something to send, send it
-        		if (rec.queue.size() > 0) {
-        			TextQueueRec txt = rec.queue.remove(0);
-        			sendPlayerEnterExit(rec.player, txt.txt);	// And send it
-        			rec.tickdelay = 50 * (titleFadeIn + 10);	// Delay by fade in time plus 1/2 second       			
-        		}
-        		else {	// Else, if we are empty and exhausted delay, remove it
-        			entersetsendqueue.remove(id);
-        		}
-        	}			
-        	if (enterexitperiod > 0) {
-        		scheduleDelayedJob(this, enterexitperiod);
-        	}
+            DynmapPlayer[] pl = core.playerList.getOnlinePlayers();
+            for (DynmapPlayer player : pl) {
+                if (player == null) continue;
+                UUID puuid = player.getUUID();
+                HashSet<EnterExitMarker> newset = new HashSet<EnterExitMarker>();
+                DynmapLocation dl = player.getLocation();
+                if (dl != null) {
+                    MarkerAPIImpl.getEnteredMarkers(dl.world, dl.x, dl.y, dl.z, newset);
+                }
+                HashSet<EnterExitMarker> oldset = entersetstate.get(puuid);
+                // See which we just left
+                if (oldset != null) {
+                    for (EnterExitMarker m : oldset) {
+                        EnterExitText txt = m.getFarewellText();
+                        if ((txt != null) && (newset.contains(m) == false)) {
+                            enqueueMessage(puuid, player, txt, false);
+                        }
+                    }
+                }
+                // See which we just entered
+                for (EnterExitMarker m : newset) {
+                    EnterExitText txt = m.getGreetingText();
+                    if ((txt != null) && ((oldset == null) || (oldset.contains(m) == false))) {
+                        enqueueMessage(puuid, player, txt, true);
+                    }
+                }
+                newstate.put(puuid, newset);
+            }
+            entersetstate = newstate;	// Replace old with new
+
+            // Go through queues - send pending messages
+            List<UUID> keys = new ArrayList<UUID>(entersetsendqueue.keySet());
+            for (UUID id : keys) {
+                SendQueueRec rec = entersetsendqueue.get(id);
+                // Check delay - count down if needed
+                if (rec.tickdelay > enterexitperiod) {
+                    rec.tickdelay -= enterexitperiod;
+                    continue;
+                }
+                rec.tickdelay = 0;
+                // If something to send, send it
+                if (rec.queue.size() > 0) {
+                    TextQueueRec txt = rec.queue.remove(0);
+                    sendPlayerEnterExit(rec.player, txt.txt);	// And send it
+                    rec.tickdelay = 50 * (titleFadeIn + 10);	// Delay by fade in time plus 1/2 second
+                }
+                else {	// Else, if we are empty and exhausted delay, remove it
+                    entersetsendqueue.remove(id);
+                }
+            }
+            if (enterexitperiod > 0) {
+                scheduleDelayedJob(this, enterexitperiod);
+            }
         }
     }
 
@@ -1097,7 +1280,7 @@ public class MapManager {
     public MapManager(DynmapCore core, ConfigurationNode configuration) {
         this.core = core;
         mapman = this;
-        
+
         chunks_read = new AtomicInteger[MapChunkCache.ChunkStats.values().length];
         chunks_read_times = new AtomicLong[MapChunkCache.ChunkStats.values().length];
         for (int i = 0; i < MapChunkCache.ChunkStats.values().length; i++) {
@@ -1108,7 +1291,7 @@ public class MapManager {
         /* Get block hiding data, if any */
         hideores = configuration.getBoolean("hideores", false);
         useBrightnessTable = configuration.getBoolean("use-brightness-table", false);
-        
+
         blockalias = new HashMap<String, String>();
         if (hideores) {
             setBlockAlias(DynmapBlockState.GOLD_ORE_BLOCK, DynmapBlockState.STONE_BLOCK); // Gold ore
@@ -1141,28 +1324,32 @@ public class MapManager {
                 }
             }
         }
-        
+
         /* See what priority to use */
         usenormalpriority = configuration.getBoolean("usenormalthreadpriority", false);
-                
+
         /* Initialize HD map manager */
-        hdmapman = new HDMapManager();  
+        hdmapman = new HDMapManager();
         hdmapman.loadHDShaders(core);
         hdmapman.loadHDPerspectives(core);
         hdmapman.loadHDLightings(core);
         parallelrendercnt = configuration.getInteger("parallelrendercnt", 0);
+        fullRenderOfflinePercent = FullRenderSpeedPolicy.percent(configuration.getDouble("full-render-speed/no-players-percent", 125), 125);
+        fullRenderOnlinePercent = FullRenderSpeedPolicy.percent(configuration.getDouble("full-render-speed/players-online-percent", 25), 25);
+        fullRenderOnlineWorkers = Math.max(1,Math.min(64,configuration.getInteger("full-render-speed/players-online-max-workers",1)));
         progressinterval = configuration.getInteger("progressloginterval", 100);
         if(progressinterval < 100) progressinterval = 100;
-        saverestorepending = configuration.getBoolean("saverestorepending", true);
+        saverestorepending = ProgressCheckpoint.enabled(configuration);
         tileupdatedelay = configuration.getInteger("tileupdatedelay", 30);
         defaulttilescale = configuration.getInteger("defaulttilescale", 0);
         if (defaulttilescale < 0) defaulttilescale = 0;
         if (defaulttilescale > 4) defaulttilescale = 4;
-        tpslimit_updaterenders = configuration.getDouble("update-min-tps", 18.0);
+        tpsBypassUntil = (long) configuration.getLong("tps-check-bypass-until", 0);
+        tpslimit_updaterenders = configuration.getDouble("update-min-tps", 15.0);
         if (tpslimit_updaterenders > 19.5) tpslimit_updaterenders = 19.5;
-        tpslimit_fullrenders = configuration.getDouble("fullrender-min-tps", 18.0);
+        tpslimit_fullrenders = configuration.getDouble("fullrender-min-tps", 15.0);
         if (tpslimit_fullrenders > 19.5) tpslimit_fullrenders = 19.5;
-        tpslimit_zoomout = configuration.getDouble("zoomout-min-tps", 18.0);
+        tpslimit_zoomout = configuration.getDouble("zoomout-min-tps", 15.0);
         if (tpslimit_zoomout > 19.5) tpslimit_zoomout = 19.5;
         // Load enter/exit processing settings
         enterexitperiod = configuration.getInteger("enterexitperiod", DEFAULT_ENTEREXIT_PERIOD);
@@ -1172,9 +1359,8 @@ public class MapManager {
         enterexitUseTitle = configuration.getBoolean("enterexitUseTitle", DEFAULT_ENTEREXIT_USETITLE);
         enterReplacesExits = configuration.getBoolean("enterReplacesExits", DEFAULT_ENTEREPLACESEXITS);
         // Load the save pending job period
-        savependingperiod = configuration.getInteger("save-pending-period", 900);
-        if ((savependingperiod > 0) && (savependingperiod < 60)) savependingperiod = 60;
-        
+        savependingperiod = (int)(ProgressCheckpoint.intervalMillis(configuration)/1000);
+
         this.tileQueue = new AsynchronousQueue<MapTile>(
                 new Handler<MapTile>() {
                 @Override
@@ -1183,10 +1369,10 @@ public class MapManager {
                     if(!scheduleDelayedJob(job, 0))
                         job.cleanup();
                 }
-            }, 
+            },
             (int) (configuration.getDouble("renderinterval", 0.5) * 1000),
             configuration.getInteger("renderacceleratethreshold", 30),
-            (int)(configuration.getDouble("renderaccelerateinterval", 0.2) * 1000), 
+            (int)(configuration.getDouble("renderaccelerateinterval", 0.2) * 1000),
             configuration.getInteger("tiles-rendered-at-once", (Runtime.getRuntime().availableProcessors()+1)/2),
             usenormalpriority);
 
@@ -1197,8 +1383,7 @@ public class MapManager {
         /* Get zoomout processing periond in seconds */
         zoomout_period = configuration.getInteger("zoomoutperiod", DEFAULT_ZOOMOUT_PERIOD);
         if(zoomout_period < 5) zoomout_period = 5;
-        
-        tileQueue.start();
+
     }
 
     void renderFullWorld(DynmapLocation l, DynmapCommandSender sender, String mapname, boolean update, boolean resume) {
@@ -1250,7 +1435,7 @@ public class MapManager {
         scheduleDelayedJob(rndr, 0);
         sender.sendMessage("Render of " + radius + " block radius starting on world '" + wname + "'...");
     }
-    
+
     public void startOBJExport(OBJExport exp, DynmapCommandSender sender) {
         ProcessOBJExport e = new ProcessOBJExport();
         e.exp = exp;
@@ -1259,30 +1444,31 @@ public class MapManager {
     }
 
     void cancelRender(String w, DynmapCommandSender sender) {
-    	synchronized(lock) {
-    		if(w != null) {
-    			FullWorldRenderState rndr;
-    			rndr = active_renders.remove(w);
-    			if(rndr != null) {
-    				rndr.cancelRender();	/* Cancel render */
-    				if(sender != null) {
-    					sender.sendMessage("Cancelled render for '" + w + "'");
-    				}
-    			}
-    		}
-    		else {	/* Else, cancel all */
-    		    String[] wids = active_renders.keySet().toArray(new String[0]);
-    			for(String wid : wids) {
-    				FullWorldRenderState rnd = active_renders.remove(wid);
-					rnd.cancelRender();
-    				if(sender != null) {
-    					sender.sendMessage("Cancelled render for '" + wid + "'");
-    				}
-    			}
-    		}
-    	}
+        synchronized(lock) {
+            if(w != null) {
+                FullWorldRenderState rndr;
+                rndr = active_renders.remove(w);
+                if(rndr != null) {
+                    rndr.cancelRender();	/* Cancel render */
+                    if(sender != null) {
+                        sender.sendMessage("Cancelled render for '" + w + "'");
+                    }
+                }
+            }
+            else {	/* Else, cancel all */
+                String[] wids = active_renders.keySet().toArray(new String[0]);
+                for(String wid : wids) {
+                    FullWorldRenderState rnd = active_renders.remove(wid);
+                    rnd.cancelRender();
+                    if(sender != null) {
+                        sender.sendMessage("Cancelled render for '" + wid + "'");
+                    }
+                }
+            }
+        }
+        var automatic = naturalRenders; if (automatic != null && sender != null) automatic.cancel(w, sender);
     }
-    
+
     void purgeQueue(DynmapCommandSender sender, String worldname) {
         DynmapWorld world = null;
         if (worldname != null) {
@@ -1318,7 +1504,7 @@ public class MapManager {
             sender.sendMessage("Purged " + cnt + " tiles from queue");
         }
     }
-    
+
     void purgeMap(final DynmapCommandSender sender, final String worldname, final String mapname) {
         final DynmapWorld world = getWorld(worldname);
         if (world == null) {
@@ -1359,7 +1545,7 @@ public class MapManager {
         cancelRender(worldname, sender);
         // And purge update queue for world
         purgeQueue(sender, worldname);
-        
+
         Runnable purgejob = new Runnable() {
             public void run() {
                 world.purgeTree();
@@ -1395,17 +1581,17 @@ public class MapManager {
         }
         Integer worldIndex = indexLookup.get(worldname);
         if(worldIndex == null) {
-        	worlds.add(dynmapWorld);	/* Put at end if no world section */
+            worlds.add(dynmapWorld);	/* Put at end if no world section */
         }
         else {
-        	int insertIndex;
-        	for(insertIndex = 0; insertIndex < worlds.size(); insertIndex++) {
-        		Integer nextWorldIndex = indexLookup.get(worlds.get(insertIndex).getName());
-        		if (nextWorldIndex == null || worldIndex < nextWorldIndex.intValue()) {
-        			break;
-       			}
-        	}
-        	worlds.add(insertIndex, dynmapWorld);
+            int insertIndex;
+            for(insertIndex = 0; insertIndex < worlds.size(); insertIndex++) {
+                Integer nextWorldIndex = indexLookup.get(worlds.get(insertIndex).getName());
+                if (nextWorldIndex == null || worldIndex < nextWorldIndex.intValue()) {
+                    break;
+                }
+            }
+            worlds.add(insertIndex, dynmapWorld);
         }
         worldsLookup.put(worldname, dynmapWorld);
         core.events.trigger("worldactivated", dynmapWorld);
@@ -1432,11 +1618,12 @@ public class MapManager {
         }
         disabled_worlds.remove(wname);
     }
-    
+
     public void loadWorld(DynmapWorld dynmapWorld) {
         /* Now, restore any pending renders for this world */
         if(saverestorepending)
             loadPending(dynmapWorld);
+        if(missingTileCheck!=null)missingTileCheck.restoreWorld(dynmapWorld);
     }
 
     public void unloadWorld(DynmapWorld dynmapWorld) {
@@ -1444,17 +1631,27 @@ public class MapManager {
             savePending(dynmapWorld, false);
     }
 
+    private boolean safeLegacyPending(File file){
+        var root=core.getDataFolder().toPath().toAbsolutePath().normalize();var path=file.toPath().toAbsolutePath().normalize();
+        if(!path.startsWith(root))return false;for(var p=path;!p.equals(root);p=p.getParent())if(java.nio.file.Files.isSymbolicLink(p))return false;return true;
+    }
     private void loadPending(DynmapWorld w) {
         String wname = w.getName();
         File f = new File(core.getDataFolder(), wname + ".pending");
-        if(f.exists()) {
-            ConfigurationNode cn = new ConfigurationNode(f);
-            cn.load();
+        ConfigurationNode cn;
+        try {cn=new ProgressCheckpoint(core,"render-world:"+wname).read();}
+        catch(java.io.IOException invalid){Log.warning("Render checkpoint unavailable or invalid for world; starting safely");return;}
+        if(cn==null&&f.isFile()&&safeLegacyPending(f)){cn=new ConfigurationNode(f);cn.load();}
+        if(cn!=null) {
+            if(cn.containsKey("layout")&&!ProgressCheckpoint.layout(w).equals(cn.getString("layout",""))){Log.warning("Render checkpoint layout changed; saved work will not be rendered at incorrect coordinates");return;}
+            var touches=cn.getNodes("touches");if(touches!=null)for(var touch:touches)touch(wname,touch.getInteger("x",0),touch.getInteger("y",0),touch.getInteger("z",0),touch.getString("reason","recovered update"));
+            var volumes=cn.getNodes("touch-volumes");if(volumes!=null)for(var v:volumes)touchVolume(wname,v.getInteger("xmin",0),v.getInteger("ymin",0),v.getInteger("zmin",0),v.getInteger("xmax",0),v.getInteger("ymax",0),v.getInteger("zmax",0),v.getString("reason","recovered update"));
             /* Get the saved tile definitions */
             int cnt = 0;
             List<ConfigurationNode> tiles = cn.getNodes("tiles");
             if(tiles != null) {
                 for(ConfigurationNode tile : tiles) {
+                    if(tile.getBoolean("stale-refresh",false))continue;
                     MapTile mt = MapTile.restoreTile(w, tile);  /* Restore tile, if possible */
                     if(mt != null) {
                         if(tileQueue.push(mt)) {
@@ -1502,29 +1699,32 @@ public class MapManager {
             }
         }
     }
-    
+
     public boolean isRenderJobActive(String wname) {
         return active_renders.containsKey(wname);
     }
 
-    private void savePending(DynmapWorld w, boolean keepQueue) {
-        List<MapTile> mt = tileQueue.popAll();
+    DynmapCore getCoreForCheckpoints(){return core;}
+    public boolean checkpointWorld(DynmapWorld world){return !saverestorepending||(world.isLoaded()&&savePending(world,true)); }
+    private boolean savePending(DynmapWorld w, boolean keepQueue) { synchronized(checkpointWriteLock) {
+        List<MapTile> mt = tileQueue.snapshot();
         File f = new File(core.getDataFolder(), w.getName() + ".pending");
         ConfigurationNode saved = new ConfigurationNode();
         ArrayList<ConfigurationNode> savedtiles = new ArrayList<ConfigurationNode>();
         for(MapTile tile : mt) {
             if(tile.getDynmapWorld() != w) {
-                tileQueue.push(tile);
                 continue;
             }
             ConfigurationNode tilenode = tile.saveTile();
             if(tilenode != null) {
+                var refresh=staleTileRefresh;
+                if(staleOwnedAtStop.contains(tile)||(refresh!=null&&refresh.owns(tile)))tilenode.put("stale-refresh",true);
                 savedtiles.add(tilenode);
             }
-            if (keepQueue) {
-                tileQueue.push(tile);
-            }
+
         }
+        saved.put("touches",touch_events.keySet().stream().filter(t->t.world.equals(w.getName())).map(t->{var n=new ConfigurationNode();n.put("x",t.x);n.put("y",t.y);n.put("z",t.z);n.put("reason",touch_events.getOrDefault(t,"recovered update"));return n;}).toList());
+        synchronized(touch_lock){saved.put("touch-volumes",touch_volume_events.stream().filter(t->t.world.equals(w.getName())).map(t->{var n=new ConfigurationNode();n.put("xmin",t.xmin);n.put("ymin",t.ymin);n.put("zmin",t.zmin);n.put("xmax",t.xmax);n.put("ymax",t.ymax);n.put("zmax",t.zmax);n.put("reason",t.reason);return n;}).toList());}
         int cnt = savedtiles.size();
         if(cnt > 0) { /* Something to save? */
             saved.put("tiles", savedtiles);
@@ -1535,7 +1735,7 @@ public class MapManager {
             invalid.put(mts.type.getPrefix(), mts.save());
             cnt += mts.getInvCount();
         }
-        if(cnt > 0) {
+        if(cnt > 0 || invalid.values().stream().anyMatch(value -> value instanceof List<?> flags && !flags.isEmpty())) {
             saved.put("invalid", invalid);
             if (!keepQueue) {
                 Log.info("Saved " + cnt + " pending tile renders in world '" + w.getName() + "'");
@@ -1552,8 +1752,9 @@ public class MapManager {
         if (!invzooms.isEmpty()) {
             saved.put("invZoomOut", invzooms);
         }
-        
+
         FullWorldRenderState job = active_renders.get(w.getName());
+        if(job==null&&stoppingJobs.containsKey(w.getName()))saved.put("job",stoppingJobs.get(w.getName()));
         if(job != null) {
             saved.put("job", job.saveState());
             if (!keepQueue) {
@@ -1562,13 +1763,10 @@ public class MapManager {
                 Log.info(job.rendertype + " job saved for world '" + w.getName() + "'");
             }
         }
-        if (saved.isEmpty()) {
-            f.delete();
-        }
-        else {
-            saved.save(f);
-        }
-    }
+        saved.put("layout",ProgressCheckpoint.layout(w));
+        try{new ProgressCheckpoint(core,"render-world:"+w.getName()).write(saved);if(safeLegacyPending(f))f.delete();if(!keepQueue)for(MapTile queued:mt)if(queued.getDynmapWorld()==w)tileQueue.remove(queued);return true;}
+        catch(java.io.IOException failure){Log.warning("Could not save render progress; the previous checkpoint is retained");return false;}
+    }}
 
     public void touch(String wname, int x, int y, int z, String reason) {
         TouchEvent evt = new TouchEvent();
@@ -1610,17 +1808,199 @@ public class MapManager {
         else
             return false;
     }
-                                                                       
+
+    private volatile NaturalRenders naturalRenders;
+
+    /** One independent low-priority full-pass frontier, never promoted into manual work. */
+    private final class NaturalRenders implements Runnable {
+        private final Object writeLock = new Object();
+        private final ProgressCheckpoint store = ProgressCheckpoint.optional(core, "natural-renders");
+        private final NaturalRenderLedger ledger;
+        private ConfigurationNode restoredJob, finalState;
+        private String restoredLayout;
+        private volatile FullWorldRenderState job;
+        private volatile boolean closed, enabled, failed;
+        private final long startup = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(0,
+            core.configuration.getInteger("natural-render/startup-delay-seconds", 60)));
+        private long quietAfter;
+        private final long idleNanos = TimeUnit.SECONDS.toNanos(Math.max(0,
+            core.configuration.getInteger("natural-render/idle-seconds", 10)));
+
+        NaturalRenders() {
+            ConfigurationNode saved = null;
+            if (store != null) try { saved = store.read(); }
+            catch (java.io.IOException invalid) { Log.warning("Natural render checkpoint unavailable; starting a fresh queue"); }
+            ledger = new NaturalRenderLedger(saved);
+            enabled = core.configuration.getBoolean("natural-render/enabled", true) && (saved == null || saved.getBoolean("enabled", true));
+            if (saved != null) {
+                restoredJob = saved.getNode("job"); restoredLayout = saved.getString("layout", "");
+                failed = saved.getBoolean("failed", false);
+            }
+        }
+        String pause() {
+            if (closed) return "stopping";
+            if (!enabled) return "disabled";
+            if (failed) return "stopped after render error; use naturalrender resume";
+            if (System.nanoTime() < startup) return "startup delay";
+            String busy = naturalForegroundReason();
+            synchronized(lock) {
+                if (busy != null) {
+                    // Still yield to the refresher's executing tile, but its steady
+                    // 10% workload must not keep extending the foreground quiet period.
+                    var refresh = staleTileRefresh;
+                    boolean staleOnly = "queued or in-flight tile updates have priority".equals(busy)
+                        && refresh != null && !tileQueue.hasWork(tile -> !refresh.owns(tile));
+                    if (!staleOnly) quietAfter = System.nanoTime() + idleNanos;
+                    return busy;
+                }
+                if (System.nanoTime() < quietAfter) return "waiting for foreground work to settle";
+            }
+            return null;
+        }
+        public void run() {
+            try {
+                if (closed || pause() != null) return;
+                FullWorldRenderState selected = null;
+                synchronized(lock) {
+                    if (job != null) {
+                        if (job.cancelled) { failed = true; Log.warning("Natural render stopped; use /mccmap naturalrender resume to retry"); }
+                        else if (getWorld(job.world.getName()) != job.world) {
+                            restoredJob = new ConfigurationNode(job.saveState()); restoredLayout = ProgressCheckpoint.layout(job.world);
+                            job.shutdownRender(); job = null;
+                        }
+                        return;
+                    }
+                    if (restoredJob != null) {
+                        var world = getWorld(restoredJob.getString("world", ""));
+                        if (world != null && !world.isLoaded()) return;
+                        if (world != null && ProgressCheckpoint.layout(world).equals(restoredLayout)) {
+                            String target = restoredJob.getString("mapname", "");
+                            var map = world.maps.stream().filter(m -> m.getName().equals(target)).findFirst().orElse(null);
+                            if (map != null && ledger.eligible(world, map)) {
+                                try { selected = new FullWorldRenderState(restoredJob); }
+                                catch (Exception invalid) { Log.warning("Natural render layout changed; restarting its map safely"); }
+                            }
+                        }
+                        restoredJob = null;
+                    }
+                    if (selected == null) outer: for (var world : worlds) if (world.isLoaded()) {
+                        for (var map : world.maps) if (ledger.eligible(world, map)) {
+                            selected = new FullWorldRenderState(world, world.getCenterLocation(), null, map.getName(), false, true);
+                            break outer;
+                        }
+                    }
+                    if (selected != null) { selected.makeNatural(); job = selected; }
+                }
+                if (selected != null) {
+                    save();
+                    Log.info("Natural render starting for '" + selected.world.getName() + "' map '" + selected.mapname + "'");
+                    if (!scheduleDelayedJob(selected, 0)) failed(selected);
+                }
+            } catch (RuntimeException failure) {
+                failed = true; Log.severe("Natural render queue stopped; use /mccmap naturalrender resume to retry", failure);
+            } finally { if (!closed) scheduleDelayedJob(this, 5000); }
+        }
+        void completed(FullWorldRenderState source, List<MapType> maps) {
+            synchronized(lock) {
+                for (var map : maps) ledger.complete(source.world, map);
+                if (job != null && job != source && job.world == source.world && maps.stream().anyMatch(m -> m.getName().equals(job.mapname))) {
+                    job.cancelRender(); job = null;
+                }
+            }
+            save();
+        }
+        void finished(FullWorldRenderState finished) {
+            synchronized(lock) { if (closed || job != finished) return; job = null; }
+            save();
+        }
+        void failed(FullWorldRenderState stopped) { synchronized(lock) { if (job == stopped) failed = true; } save(); }
+        void cancel(String world, DynmapCommandSender sender) {
+            synchronized(lock) {
+                if (world == null) for (var w : worlds) ledger.suspend(w.getName()); else ledger.suspend(world);
+                if (job != null && (world == null || job.world.getName().equals(world))) {
+                    job.cancelRender(); job = null; failed = false;
+                    if (sender != null) sender.sendMessage("Natural render cancelled; this world's automatic queue is suspended until /mccmap naturalrender resume");
+                }
+            }
+            save();
+        }
+        void control(String action) {
+            FullWorldRenderState retry = null;
+            synchronized(lock) {
+                if (action.equals("off")) enabled = false;
+                else { enabled = true; if (action.equals("resume")) { ledger.resume(); if (failed && job != null) { retry = job; retry.cancelled = false; retry.shutdown = false; } failed = false; } }
+            }
+            save(); if (retry != null) scheduleDelayedJob(retry, 0);
+        }
+        void save() {
+            if (store == null) return;
+            synchronized(writeLock) {
+                ConfigurationNode saved;
+                synchronized(lock) {
+                    if (closed && finalState != null) { saved = finalState; }
+                    else {
+                    saved = ledger.save(); saved.put("enabled", enabled); saved.put("failed", failed);
+                    if (job != null) { saved.put("job", job.saveState()); saved.put("layout", ProgressCheckpoint.layout(job.world)); }
+                    else if (restoredJob != null) { saved.put("job", restoredJob); saved.put("layout", restoredLayout); }
+                    if (closed) finalState = saved;
+                    }
+                }
+                try { store.write(saved); }
+                catch (java.io.IOException failure) { Log.warning("Could not save natural renders; previous checkpoint retained"); }
+            }
+        }
+        void stop() { closed = true; save(); synchronized(lock) { if (job != null) job.shutdownRender(); } }
+        String describe() {
+            String pause = pause();
+            return "Natural rendering: " + (pause != null ? pause : job == null ? "idle; completed or suspended maps are skipped" : job.progressSummary())
+                + "; " + (fullRenderPlayers > 0 ? FullRenderSpeedPolicy.percent(core.configuration.getDouble("natural-render/players-online-percent", 10), 10)
+                    : fullRenderOfflinePercent) + "% of original baseline";
+        }
+    }
+
+    String naturalForegroundReason() {
+        if (pausefullrenders || pauseupdaterenders) return "manual render pause";
+        if (tpspausefullrenders || tpspauseupdaterenders) return "low TPS";
+        String storage = storagePauseReason(); if (storage != null) return storage;
+        synchronized(lock) { if (!active_renders.isEmpty()) return "manual renders have priority"; }
+        if (tileQueue.hasWork()) return "queued or in-flight tile updates have priority";
+        if (!touch_events.isEmpty()) return "player-triggered block updates have priority";
+        synchronized(touch_lock) { if (!touch_volume_events.isEmpty()) return "volume updates have priority"; }
+        for (var world : worlds) if (world.isLoaded()) for (var state : world.mapstate)
+            if (state.hasPendingUpdates()) return "delayed tile updates have priority";
+        return null;
+    }
+    private String naturalPauseReason() { var automatic = naturalRenders; return automatic == null ? "not started" : automatic.pause(); }
+
+    public void naturalRenderControl(DynmapCommandSender sender, String action) {
+        var automatic = naturalRenders;
+        if (automatic == null) { statsMessage(sender, "Natural rendering: unavailable"); return; }
+        if (List.of("on", "off", "resume").contains(action)) automatic.control(action);
+        else if (!action.equals("status")) { sender.sendMessage("Usage: /mccmap naturalrender [status|on|off|resume]"); return; }
+        statsMessage(sender, automatic.describe());
+    }
+
+    private volatile MissingTileCheck missingTileCheck;
+
     public void startRendering() {
+        missingTileCheck = new MissingTileCheck(core, this);
+        missingTileCheck.restore();
         render_pool = new DynmapScheduledThreadPoolExecutor();
+        if(saverestorepending){checkpointWorker=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"MCCMap progress checkpoints");t.setDaemon(true);return t;});checkpointWorker.scheduleWithFixedDelay(()->{for(var world:worlds)if(world.isLoaded())try{savePending(world,true);}catch(RuntimeException failure){Log.warning("Could not checkpoint render work; previous progress retained");}var automatic=naturalRenders;if(automatic!=null)automatic.save();},savependingperiod,savependingperiod,TimeUnit.SECONDS);}
+        int boostWorkers = FullRenderSpeedPolicy.maximumParallelism(parallelrendercnt, fullRenderOfflinePercent) - Math.max(1, parallelrendercnt);
+        if (boostWorkers > 0) fullRenderBoostPool = Executors.newFixedThreadPool(boostWorkers, r -> {
+            Thread t = new OurThreadFactory().newThread(r); t.setName("MCCMap Full Render Boost"); return t;
+        });
+        naturalRenders = new NaturalRenders();
+        scheduleDelayedJob(naturalRenders, 5000);
         tileQueue.start();
-        scheduleDelayedJob(new DoZoomOutProcessing(), 60000);
+        scheduleDelayedJob(new DoZoomOutProcessing(), 5000);
         scheduleDelayedJob(new CheckWorldTimes(), 5000);
         scheduleDelayedJob(new DoTouchProcessing(), 1000);
         // If enabled, start enter/exit processing
         if (enterexitperiod > 0) {
-        	Log.info("Starting enter/exit processing");
-        	scheduleDelayedJob(new DoUserMoveProcessing(), enterexitperiod);
+            Log.info("Starting enter/exit processing");
+            scheduleDelayedJob(new DoUserMoveProcessing(), enterexitperiod);
         }
         /* Resume pending jobs */
         for(FullWorldRenderState job : active_renders.values()) {
@@ -1628,22 +2008,63 @@ public class MapManager {
             Log.info("Resumed render starting on world '" + job.world.getName() + "'...");
         }
         did_start = true;
+        if (core.configuration.getBoolean("stale-tile-refresh/enabled", true)) {
+            try { staleTileRefresh = new StaleTileRefresh(core, this); }
+            catch (java.io.IOException | RuntimeException failure) { Log.warning("Stale tile refresh could not start; normal rendering remains enabled"); }
+        }
+    }
+
+    private volatile StaleTileRefresh staleTileRefresh;
+    String storagePauseReason() {
+        var usage = core.getStorageUsage(); return usage == null ? null : usage.pauseReason();
+    }
+    String stalePauseReason(int backlogLimit) {
+        if (storagePauseReason() != null) return storagePauseReason();
+        if (pauseupdaterenders) return "Manual update-render pause";
+        if (tpspauseupdaterenders) return "Low TPS";
+        synchronized (lock) { if (!active_renders.isEmpty()) return "Manual full/radius render has priority"; }
+        if (tileQueue.size() >= backlogLimit) return "Normal update backlog has priority";
+        return null;
+    }
+    boolean canRefreshStaleTiles(int backlogLimit) {
+        return stalePauseReason(backlogLimit) == null;
+    }
+    public void recordSuccessfulTileRender(org.dynmap.storage.MapStorageTile tile, long timestamp) {
+        var refresh = staleTileRefresh;
+        if (refresh != null) refresh.recordSuccessful(tile, timestamp);
+    }
+    public void recordTileRefreshComplete(org.dynmap.hdmap.HDMapTile tile) {
+        var refresh = staleTileRefresh;
+        if (refresh != null) refresh.recordCompleted(tile);
     }
 
     public void stopRendering() {
+        var automatic = naturalRenders; if (automatic != null) automatic.stop();
+        if(checkpointWorker!=null){checkpointWorker.shutdownNow();try{checkpointWorker.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}}
+        var check = missingTileCheck; missingTileCheck = null; if(check != null)check.close();
+        var refresh = staleTileRefresh;
+        if(refresh!=null)staleOwnedAtStop=refresh.ownedTiles();
+        if (refresh != null) refresh.close();
+        staleTileRefresh = null;
         // Stop the tile queue
         tileQueue.stop();
         /* Tell all worlds to cancel any zoom out processing */
         for(DynmapWorld w: worlds)
             w.cancelZoomOutFreshen();
-        /* Unload all worlds, and save any pending */
-        for(DynmapWorld w : worlds) {
-            if(w.isLoaded()) {
-                w.setWorldUnloaded();
-                if(saverestorepending) {
-                    savePending(w, false);
-                }
-            }
+        // Preserve a safe frontier, stop workers, then take the final queue/zoom snapshot.
+        List<DynmapWorld> stoppingWorlds=new ArrayList<>();
+        for(DynmapWorld w:worlds)if(w.isLoaded()) {
+            stoppingWorlds.add(w);var job=active_renders.get(w.getName());
+            if(job!=null){var snapshot=job.saveState();if(snapshot!=null)stoppingJobs.put(w.getName(),snapshot);job.shutdownRender();}
+            w.setWorldUnloaded();
+        }
+        // Extra workers belong exclusively to full/radius renders.
+        var boostPool = fullRenderBoostPool; fullRenderBoostPool = null;
+        if (boostPool != null) {
+            for (Runnable queued : boostPool.shutdownNow())
+                if (queued instanceof Future<?> task) task.cancel(true);
+            try { boostPool.awaitTermination(5, TimeUnit.SECONDS); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         }
         // Shutdown render pool
         render_pool.shutdown();
@@ -1656,7 +2077,8 @@ public class MapManager {
             render_pool.awaitTermination(5, TimeUnit.SECONDS);
         } catch (InterruptedException ix) {
         }
-        
+
+        if(saverestorepending)for(var world:stoppingWorlds)savePending(world,false);
         mapman = null;
         hdmapman = null;
         did_start = false;
@@ -1716,8 +2138,46 @@ public class MapManager {
      * @param sender - command sender
      * @param prefix - map ID prefix for stats to print
      */
+    private static void statsMessage(DynmapCommandSender sender, String text) { sender.sendMessage(StatsColors.format(text)); }
+
+    public void printProgress(DynmapCommandSender sender, String world) {
+        boolean any = false;
+        synchronized (lock) {
+            for (var job : active_renders.values()) {
+                if (world != null && !job.world.getName().equals(world)) continue;
+                statsMessage(sender, job.progressSummary());
+                any = true;
+            }
+        }
+        var automatic = naturalRenders;
+        if (automatic != null && automatic.job != null && (world == null || automatic.job.world.getName().equals(world))) {
+            statsMessage(sender, automatic.job.progressSummary()); any = true;
+        }
+        if (!any) statsMessage(sender, "No active full/radius/update renders" + (world == null ? "." : " for '" + world + "'."));
+    }
+
     public void printStats(DynmapCommandSender sender, String prefix) {
-        sender.sendMessage("Tile Render Statistics:");
+        var usage = core.getStorageUsage();
+        if (usage != null) {
+            usage.requestScan();
+            for (String line : StorageUsageMonitor.describe(usage.snapshot(), System.currentTimeMillis())) statsMessage(sender, line);
+            var jar = core.getPluginJarFile();
+            if (jar != null) statsMessage(sender, "  Installed JAR: " + StorageUsageMonitor.bytes(jar.length()) + " (outside data cap)");
+        }
+        var check = missingTileCheck;
+        if(check != null)for(String line : check.describe())statsMessage(sender,line);
+        var automatic = naturalRenders; if (automatic != null) statsMessage(sender, automatic.describe());
+        statsMessage(sender, "TPS checks: " + (System.currentTimeMillis() < tpsBypassUntil ? "bypassed for " + ((tpsBypassUntil - System.currentTimeMillis()) / 60000) + " more minutes" : "enabled; ten-minute retry hold; ignored with no players"));
+        var refresh = staleTileRefresh;
+        if (refresh != null) for (String line : refresh.describe()) statsMessage(sender, line);
+        else statsMessage(sender, core.configuration.getBoolean("stale-tile-refresh/enabled", true)
+            ? "Stale tile refresh: unavailable (startup failed; see console)" : "Stale tile refresh: disabled in configuration");
+        statsMessage(sender, "Full/radius render speed: " + (fullRenderPlayers == 0 ? fullRenderOfflinePercent : fullRenderOnlinePercent)
+            + "% of original baseline (" + fullRenderPlayers + " players online; online worker limit " + fullRenderOnlineWorkers + "); stale refresh pacing is independent");
+        statsMessage(sender, "Render pauses: updates=" + (pauseupdaterenders ? "manual" : tpspauseupdaterenders ? "low TPS" : "none")
+            + ", full/radius=" + (pausefullrenders ? "manual" : tpspausefullrenders ? "low TPS" : "none")
+            + ", storage=" + (storagePauseReason() == null ? "none" : storagePauseReason()));
+        statsMessage(sender, "Tile Render Statistics:");
         MapStats tot = new MapStats();
         int invcnt = 0;
         for(DynmapWorld dw : this.worlds) {
@@ -1730,7 +2190,7 @@ public class MapManager {
                 if((prefix != null) && !k.startsWith(prefix))
                     continue;
                 MapStats ms = mapstats.get(k);
-                sender.sendMessage(String.format("  %s: processed=%d, rendered=%d, updated=%d, transparent=%d",
+                statsMessage(sender, String.format("  %s: processed=%d, rendered=%d, updated=%d, transparent=%d",
                         k, ms.loggedcnt, ms.renderedcnt, ms.updatedcnt, ms.transparentcnt));
                 tot.loggedcnt += ms.loggedcnt;
                 tot.renderedcnt += ms.renderedcnt;
@@ -1738,21 +2198,23 @@ public class MapManager {
                 tot.transparentcnt += ms.transparentcnt;
             }
         }
-        sender.sendMessage(String.format("  TOTALS: processed=%d, rendered=%d, updated=%d, transparent=%d",
+        statsMessage(sender, String.format("  TOTALS: processed=%d, rendered=%d, updated=%d, transparent=%d",
                 tot.loggedcnt, tot.renderedcnt, tot.updatedcnt, tot.transparentcnt));
-        sender.sendMessage(String.format("  Triggered update queue size: %d + %d", tileQueue.size(), invcnt));
-        String act = "";
-        for(String wn : active_renders.keySet())
-        	act += wn + " ";
-        sender.sendMessage(String.format("  Active render jobs: %s", act));
+        statsMessage(sender, String.format("  Triggered update queue size: %d + %d", tileQueue.size(), invcnt));
+        String act;
+        synchronized (lock) { act = String.join(" ", active_renders.keySet()); }
+        statsMessage(sender, String.format("  Active render jobs: %s", act));
+        synchronized (lock) {
+            for (var job : active_renders.values()) statsMessage(sender, "  " + job.progressSummary());
+        }
         /* Chunk load stats */
-        sender.sendMessage("Chunk Loading Statistics:");
-        sender.sendMessage(String.format("  Cache hit rate: %.2f%%", core.getServer().getCacheHitRate()));
+        statsMessage(sender, "Chunk Loading Statistics:");
+        statsMessage(sender, String.format("  Cache hit rate: %.2f%%", core.getServer().getCacheHitRate()));
         for (MapChunkCache.ChunkStats cs : MapChunkCache.ChunkStats.values()) {
             int cnt = chunks_read[cs.ordinal()].get();
             if (cnt == 0) cnt = 1;
             long ts = chunks_read_times[cs.ordinal()].get();
-            sender.sendMessage(String.format("  Chunks processed: %s: count=%d, %.2f msec/chunk", cs.getLabel(), cnt, 0.000001 * (ts / cnt)));
+            statsMessage(sender, String.format("  Chunks processed: %s: count=%d, %.2f msec/chunk", cs.getLabel(), cnt, 0.000001 * (ts / cnt)));
         }
     }
     /**
@@ -1799,16 +2261,16 @@ public class MapManager {
         }
         core.getServer().resetCacheStats();
         sender.sendMessage("Tile Render Statistics reset");
-    }    
+    }
 
     public boolean getSmoothLighting() {
         return core.smoothlighting;
     }
-    
+
     public boolean getBetterGrass() {
         return core.bettergrass;
     }
-    
+
     public boolean getHideOres() {
         return hideores;
     }
@@ -1864,7 +2326,7 @@ public class MapManager {
     boolean getPauseUpdateRenders() {
         return pauseupdaterenders;
     }
-    
+
     /* Connect any jobs tied to this player back to the player (resumes output to player) */
     void connectTasksToPlayer(DynmapPlayer p) {
         String pn = p.getName();
@@ -1874,7 +2336,7 @@ public class MapManager {
             }
         }
     }
-    
+
     /**
      * Process touch events
      */
@@ -1971,20 +2433,47 @@ public class MapManager {
             tve.clear();
         }
     }
-    
+
     public int getMaxChunkLoadsPerTick() {
         return max_chunk_loads_per_tick;
     }
-    
+
+    void updateRenderPlayerCount(int players) { fullRenderPlayers = Math.max(0, players); }
+
     public void updateTPS(double tps) {
-        // Pause if needed for update renders
-        tpspauseupdaterenders = (tps < tpslimit_updaterenders);
-        // Pause if needed for fullrenders
-        tpspausefullrenders = (tps < tpslimit_fullrenders);
-        // Pause if needed for zoom out
-        tpspausezoomout = (tps < tpslimit_zoomout);
+        long now = System.nanoTime();
+        int players = core.getServer().getOnlinePlayers().length;
+        updateRenderPlayerCount(players);
+        boolean bypass = System.currentTimeMillis() < tpsBypassUntil;
+        tpspauseupdaterenders = updateTpsGate.paused(tps, tpslimit_updaterenders, players, bypass, now);
+        tpspausefullrenders = fullTpsGate.paused(tps, tpslimit_fullrenders, players, bypass, now);
+        tpspausezoomout = zoomTpsGate.paused(tps, tpslimit_zoomout, players, bypass, now);
+        String reason = players == 0 ? "no players online; TPS limits ignored." : bypass ? "24-hour TPS bypass active."
+            : String.format(java.util.Locale.ROOT, "TPS %.2f; low-TPS pauses last 10 minutes before the next check. Other pause conditions still apply.", tps);
+        // Called from the server tick: command-owner messages stay on the server thread.
+        List<FullWorldRenderState> jobs;
+        synchronized (lock) { jobs = new ArrayList<>(active_renders.values()); }
+        for (FullWorldRenderState job : jobs) {
+            if (job.cancelled || job.tile0 != null) continue;
+            if (!job.tpsNotifications.wouldChange(tpspausefullrenders)) continue;
+            DynmapPlayer owner = job.player == null || job.player.isEmpty() ? null : core.getServer().getPlayer(job.player);
+            String render = job.rendertype + " for world '" + job.world.getName() + "'"
+                + (job.mapname == null ? "" : " (map '" + job.mapname + "')");
+            job.tpsNotifications.update(tpspausefullrenders, render, reason, Log::info,
+                owner == null ? null : owner::sendMessage);
+        }
+        updateTpsNotifications.update(tpspauseupdaterenders, "automatic update renders", reason, Log::info, null);
+        zoomTpsNotifications.update(tpspausezoomout, "zoom-out renders", reason, Log::info, null);
     }
-    
+
+    public void setTpsBypass(boolean enabled) {
+        tpsBypassUntil = enabled ? System.currentTimeMillis() + TimeUnit.HOURS.toMillis(24) : 0;
+        core.configuration.put("tps-check-bypass-until", tpsBypassUntil);
+        if (!core.configuration.save()) Log.warning("Could not persist TPS bypass expiry");
+        updateTPS(core.getServer().getServerTPS());
+    }
+    public long getTpsBypassUntil() { return tpsBypassUntil; }
+
     public boolean getTPSFullRenderPause() {
         return tpspausefullrenders;
     }

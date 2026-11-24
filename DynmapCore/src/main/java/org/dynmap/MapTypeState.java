@@ -96,11 +96,8 @@ public class MapTypeState {
     
     public List<String> save() {
         synchronized(invTileLock) {
-            invTiles.union(pendingInvTiles);
-            invTiles.union(pendingInvTilesAlt);
-            pendingInvTiles.clear();
-            pendingInvTilesAlt.clear();
-            return invTiles.save();
+            TileFlags snapshot=new TileFlags();snapshot.union(invTiles);snapshot.union(pendingInvTiles);snapshot.union(pendingInvTilesAlt);
+            return snapshot.save();
         }
     }
     public void restore(List<String> saved) {
@@ -185,9 +182,19 @@ public class MapTypeState {
         }
     }
 
+    public void mergeZoomOut(java.util.List<java.util.List<String>> saved) {
+        if(saved==null||zoomOutLevels<=0)return;
+        for(int i=0;i<saved.size();i++){int level=i%zoomOutLevels;var flags=new TileFlags();if(saved.get(i)==null)continue;flags.load(saved.get(i));var iterator=flags.getIterator();var coord=new TileFlags.TileCoord();for(int n=flags.countFlags();n>0&&iterator.next(coord);n--)setZoomOutInv(coord.x<<level,coord.y<<level,level);}
+    }
+
     public int getInvCount() {
         synchronized(invTileLock) {
             return invTiles.countFlags();
+        }
+    }
+    public boolean hasPendingUpdates() {
+        synchronized(invTileLock) {
+            return invTiles.countFlags() > 0 || pendingInvTiles.countFlags() > 0 || pendingInvTilesAlt.countFlags() > 0;
         }
     }
     public void clear() {
@@ -232,6 +239,15 @@ public class MapTypeState {
     // Start zoom out iteration (stash and reset accumulator)
     public void startZoomOutIter() {
         synchronized(invTileLock) {
+            // A pause can leave active work unfinished. Carry it into the next pass.
+            for (int level = 0; level < zoomOutInv.size(); level++) {
+                TileFlags active = zoomOutInv.get(level);
+                if (active != null && active.countFlags() > 0) {
+                    TileFlags pending = zoomOutInvAccum.get(level);
+                    if (pending == null) { pending = new TileFlags(); zoomOutInvAccum.set(level, pending); }
+                    pending.union(active);
+                }
+            }
             ArrayList<TileFlags> tmplist = zoomOutInv;
             zoomOutInv = zoomOutInvAccum;
             for (int i = 0; i < tmplist.size(); i++) {

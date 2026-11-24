@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.common;
 
 public interface DynmapCommandSender {
@@ -23,7 +24,7 @@ public interface DynmapCommandSender {
      */
     public boolean isOp();
     /**
-     * Test for permission node (no dynmap. prefix assumed)
+     * Test for permission node (no mccmap. prefix assumed)
      * @param node - permission ID
      * @return true if allowed
      */

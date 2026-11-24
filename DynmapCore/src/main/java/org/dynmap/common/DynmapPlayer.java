@@ -1,12 +1,12 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.common;
 
-import java.net.InetSocketAddress;
 import java.util.UUID;
 
 import org.dynmap.DynmapLocation;
 
 /**
- * Player (server neutral) - represents online or offline player 
+ * Player (server neutral) - represents online or offline player
  */
 public interface DynmapPlayer extends DynmapCommandSender {
     /**
@@ -34,11 +34,7 @@ public interface DynmapPlayer extends DynmapCommandSender {
      * @return id
      */
     public String getWorld();
-    /**
-     * Get connected address for player
-     * @return connection address, or null if unknown
-     */
-    public InetSocketAddress getAddress();
+
     /**
      * Check if player is sneaking
      * @return true if sneaking
@@ -66,15 +62,11 @@ public interface DynmapPlayer extends DynmapCommandSender {
      */
     public DynmapLocation getBedSpawnLocation();
     /**
-     * Get last login time
-     * @return UTC time (msec) of last login
+     * Get last seen time
+     * @return UTC time (msec) when last seen
      */
-    public long getLastLoginTime();
-    /**
-     * Get first login time
-     * @return UTC time (msec) of first login
-     */
-    public long getFirstLoginTime();
+    public long getLastSeenTime();
+
     /**
      * Is invisible
      * @return true if invisible
@@ -104,8 +96,8 @@ public interface DynmapPlayer extends DynmapCommandSender {
      * Send title and subtitle text (called from server thread)
      */
     public default void sendTitleText(String title, String subtitle, int fadeInTicks, int stayTicks, int fadeOutTIcks) {
-    	// Fallback if not implemented
-    	if (title != null) this.sendMessage(title);;
-    	if (subtitle != null) this.sendMessage(subtitle);
-	}
+        // Fallback if not implemented
+        if (title != null) this.sendMessage(title);;
+        if (subtitle != null) this.sendMessage(subtitle);
+    }
 }

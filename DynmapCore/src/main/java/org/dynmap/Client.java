@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import java.io.IOException;
@@ -12,7 +13,7 @@ import org.owasp.html.Sanitizers;
 import org.dynmap.common.DynmapChatColor;
 
 public class Client {
-    
+
     public static class Update implements JSONAware, JSONStreamAware {
         public long timestamp = System.currentTimeMillis();
 
@@ -29,13 +30,11 @@ public class Client {
 
     public static class ChatMessage extends Update {
         public String type = "chat";
-        public String source;
+        public final String source = "player";
         public String playerName;   // Note: this needs to be client-safe HTML text (can include tags, but only sanitized ones)
         public String message;
-        public String account;
-        public String channel;
-        public ChatMessage(String source, String channel, String playerName, String message, String playeraccount) {
-            this.source = source;
+        public String playerId;
+        ChatMessage(String playerName, String message, String playerId) {
             if (ClientUpdateComponent.hideNames)
                 this.playerName = "";
             else if (ClientUpdateComponent.usePlayerColors)
@@ -43,8 +42,7 @@ public class Client {
             else
                 this.playerName = Client.stripColor(playerName);
             this.message = DynmapChatColor.stripColor(message);
-            this.account = playeraccount;
-            this.channel = channel;
+            this.playerId = playerId;
         }
         @Override
         public boolean equals(Object o) {
@@ -57,60 +55,6 @@ public class Client {
         @Override
         public int hashCode() {
             return source.hashCode() ^ playerName.hashCode() ^ message.hashCode();
-        }
-    }
-
-    public static class PlayerJoinMessage extends Update {
-        public String type = "playerjoin";
-        public String playerName;   // Note: this needs to be client-safe HTML text (can include tags, but only sanitized ones)
-        public String account;
-        public PlayerJoinMessage(String playerName, String playeraccount) {
-            if (ClientUpdateComponent.hideNames)
-                this.playerName = "";
-            else if (ClientUpdateComponent.usePlayerColors)
-                this.playerName = Client.encodeColorInHTML(playerName);
-            else
-                this.playerName = Client.stripColor(playerName);
-            this.account = playeraccount;
-        }
-        @Override
-        public boolean equals(Object o) {
-            if(o instanceof PlayerJoinMessage) {
-                PlayerJoinMessage m = (PlayerJoinMessage)o;
-                return m.playerName.equals(playerName);
-            }
-            return false;
-        }
-        @Override
-        public int hashCode() {
-            return account.hashCode();
-        }
-    }
-
-    public static class PlayerQuitMessage extends Update {
-        public String type = "playerquit";
-        public String playerName;   // Note: this needs to be client-safe HTML text (can include tags, but only sanitized ones)
-        public String account;
-        public PlayerQuitMessage(String playerName, String playeraccount) {
-            if (ClientUpdateComponent.hideNames)
-                this.playerName = "";
-            else if (ClientUpdateComponent.usePlayerColors)
-                this.playerName = Client.encodeColorInHTML(playerName);
-            else
-                this.playerName = Client.stripColor(playerName);
-            this.account = playeraccount;
-        }
-        @Override
-        public boolean equals(Object o) {
-            if(o instanceof PlayerQuitMessage) {
-                PlayerQuitMessage m = (PlayerQuitMessage)o;
-                return m.playerName.equals(playerName);
-            }
-            return false;
-        }
-        @Override
-        public int hashCode() {
-            return account.hashCode();
         }
     }
 
@@ -159,7 +103,7 @@ public class Client {
         public String type = "component";
         /* Each subclass must provide 'ctype' string for component 'type' */
     }
-    
+
     // Strip color - assume we're returning safe html text
     public static String stripColor(String s) {
         s = DynmapChatColor.stripColor(s);    /* Strip standard color encoding */
@@ -203,7 +147,7 @@ public class Client {
     };
     private static Random rnd = new Random();
     private static String rndchars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    // Replace color codes with corresponding <span - assume we're returning safe HTML text 
+    // Replace color codes with corresponding <span - assume we're returning safe HTML text
     public static String encodeColorInHTML(String s) {
         StringBuilder sb = new StringBuilder();
         int cnt = s.length();
@@ -211,7 +155,7 @@ public class Client {
         boolean magic = false;
         for (int i = 0; i < cnt; i++) {
             char c = s.charAt(i);
-            if (c == '\u00A7') { // Escape? 
+            if (c == '\u00A7') { // Escape?
                 i++;    // Move past it
                 c = s.charAt(i);
                 if (c == 'k') { // Magic text?
@@ -233,7 +177,7 @@ public class Client {
                                 s.charAt(i+1) == s.charAt(i+7) &&
                                 s.charAt(i+1) == s.charAt(i+9) &&
                                 s.charAt(i+1) == s.charAt(i+11) && // Check if there are enough \u00A7 in a row
-                                s.charAt(i+1) == '\u00A7'){ 
+                                s.charAt(i+1) == '\u00A7'){
                                     StringBuilder hex = new StringBuilder().append(s.charAt(i+2))
                                                                             .append(s.charAt(i+4))
                                                                             .append(s.charAt(i+6))
@@ -283,11 +227,11 @@ public class Client {
         return sanitizeHTML(sb.toString());
     }
 
-    private static PolicyFactory sanitizer = null; 
+    private static PolicyFactory sanitizer = null;
     private static PolicyFactory OLDTAGS = new HtmlPolicyBuilder().allowElements("center", "basefont", "hr").toFactory();
     public static String sanitizeHTML(String html) {
-    	// Don't sanitize if null or no html markup
-    	if ((html == null) || (html.indexOf('<') < 0)) return html;
+        // Don't sanitize if null or no html markup
+        if ((html == null) || (html.indexOf('<') < 0)) return html;
         PolicyFactory s = sanitizer;
         if (s == null) {
             // Generous but safe html formatting allowances
@@ -296,12 +240,12 @@ public class Client {
         }
         return s.sanitize(html);
     }
-    private static PolicyFactory stripper = null; 
+    private static PolicyFactory stripper = null;
     public static String stripHTML(String html) {
         PolicyFactory s = stripper;
         if (s == null) {
-        	// Strip all taks
-        	s = new HtmlPolicyBuilder().toFactory();
+            // Strip all taks
+            s = new HtmlPolicyBuilder().toFactory();
             stripper = s;
         }
         return s.sanitize(html);
@@ -314,9 +258,9 @@ public class Client {
         for (int j = 0; j < s.length(); j++) {
             char c = s.charAt(j);
             switch (c) {
-            	case '"':
-            		str.append("&quot;");
-            		break;
+                case '"':
+                    str.append("&quot;");
+                    break;
                 case '&':
                     str.append("&amp;");
                     break;
@@ -327,13 +271,13 @@ public class Client {
                     str.append("&gt;");
                     break;
                 case '\'':
-                	str.append("&#39;");
-                	break;
+                    str.append("&#39;");
+                    break;
                 default:
-            		str.append(c);
-            		break;
+                    str.append(c);
+                    break;
             }
         }
         return str.toString();
-    }	
+    }
 }

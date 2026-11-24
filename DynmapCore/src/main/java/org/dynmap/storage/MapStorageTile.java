@@ -1,3 +1,4 @@
+// Modified for MCCMap: independent Paper fork (2026).
 package org.dynmap.storage;
 
 import java.awt.image.BufferedImage;
@@ -17,6 +18,11 @@ public abstract class MapStorageTile {
     public final int x, y;
     public final int zoom;
     public final MapType.ImageVariant var;
+    /** Storage timestamp supplied by enumeration, without loading the image; -1 when unknown. */
+    public long lastModified = -1;
+
+    /** Storage modification time without reading image contents; -1 when unavailable. */
+    public long getLastModified() { return lastModified; }
     
     public static class TileRead {
         public BufferInputStream image;    // Image bytes
@@ -50,6 +56,8 @@ public abstract class MapStorageTile {
      * @return loaded Tile, or null if not read
      */
     public abstract TileRead read();
+    /** Web-only recovery imagery must never become input to a stored zoom tile. */
+    public TileRead readForDisplay() {return read();}
     /**
      * Write tile
      *

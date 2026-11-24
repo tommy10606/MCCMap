@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.markers.impl;
 
 import java.util.HashMap;
@@ -25,24 +26,24 @@ public class MarkerSignManager {
         int x, y, z;
         Marker m;
     }
-    
+
     private static class SignListener implements DynmapListenerManager.SignChangeEventListener, Runnable {
         @Override
         public void signChangeEvent(String material, String wname, int x, int y, int z, String[] lines, DynmapPlayer p) {
             if(mgr == null)
-                return;			
-			
-            if(!lines[0].equalsIgnoreCase("[dynmap]")) {  /* If not dynmap sign, quit */
+                return;
+
+            if(!lines[0].equalsIgnoreCase("[mccmap]")) {  /* If not dynmap sign, quit */
                 return;
             }
-			
+
             /* If allowed to do marker signs */
             if((p == null) || ((plugin != null) && (plugin.checkPlayerPermission(p, "marker.sign")))) {
                 String id = getSignMarkerID(wname, x, y, z);  /* Get marker ID */
                 String set = defSignSet;
                 String icon = MarkerIcon.SIGN;
                 String label = "";
-                lines[0] = ""; /* Blank out [dynmap] */
+                lines[0] = ""; /* Blank out [mccmap] */
                 for(int i = 1; i < 4; i++) {    /* Check other lines for icon: or set: */
                     String v = plugin.getServer().stripChatColor(lines[i]);
                     if(v.startsWith("icon:")) { /* icon: */
@@ -63,13 +64,13 @@ public class MarkerSignManager {
                 /* Get the set and see if the marker is already defined */
                 MarkerSet ms = MarkerAPIImpl.api.getMarkerSet(set);
                 if(ms == null) {
-                    if(p != null) p.sendMessage("Bad marker set - [dynmap] sign invalid");
+                    if(p != null) p.sendMessage("Bad marker set - [mccmap] sign invalid");
                     lines[0] = DynmapChatColor.RED + "<Bad Marker Set>";
                     return;
                 }
                 MarkerIcon mi = MarkerAPIImpl.api.getMarkerIcon(icon);  /* Get icon */
                 if(mi == null) {
-                    if(p != null) p.sendMessage("Bad marker icon - [dynmap] sign invalid");
+                    if(p != null) p.sendMessage("Bad marker icon - [mccmap] sign invalid");
                     lines[0] = DynmapChatColor.RED + "<Bad Marker Icon>";
                     return;
                 }
@@ -83,7 +84,7 @@ public class MarkerSignManager {
                     marker = ms.createMarker(id, label, true, wname, (double)x + 0.5, (double)y + 0.5, (double)z + 0.5,
                                              mi, true);
                     if(marker == null) {
-                        if(p != null) p.sendMessage("Bad marker - [dynmap] sign invalid");
+                        if(p != null) p.sendMessage("Bad marker - [mccmap] sign invalid");
                         lines[0] = DynmapChatColor.RED + "<Bad Marker>";
                         return;
                     }
@@ -100,7 +101,7 @@ public class MarkerSignManager {
             }
         }
         private HashMap<String, SignRec> sign_cache = null;
-        
+
         public void run() {
             if(mgr == null)
                 return;
@@ -156,7 +157,7 @@ public class MarkerSignManager {
             plugin.getServer().scheduleServerTask(sl, 60*20);
         }
     }
-    private static SignListener sl = null;  /* Do once - /dynmap reload doesn't reset listeners */
+    private static SignListener sl = null;  /* Do once - /mccmap reload doesn't reset listeners */
 
     private static String escapeMarkup(String v) {
         v = v.replace("&", "&amp;");
@@ -165,7 +166,7 @@ public class MarkerSignManager {
         v = v.replace(">", "&gt;");
         return v;
     }
-    
+
     public static MarkerSignManager initializeSignManager(DynmapCore plugin, String defsignset) {
         mgr = new MarkerSignManager();
         defSignSet = defsignset;
@@ -180,9 +181,9 @@ public class MarkerSignManager {
     public static void terminateSignManager(DynmapCore plugin) {
         mgr = null;
     }
-    
+
     private static String getSignMarkerID(String wname, int x, int y, int z) {
         return "_sign_" + wname + "_" + x + "_" + y + "_" + z;
     }
-        
+
 }

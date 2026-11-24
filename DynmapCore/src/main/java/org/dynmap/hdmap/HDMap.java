@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.hdmap;
 
 import java.util.ArrayList;
@@ -23,6 +24,12 @@ public class HDMap extends MapType {
 
     private String name;
     private String prefix;
+    private String rasterPrefix;
+    private boolean versionedTiles;
+    private int legacyScaleShift = -1;
+    private int legacyPngScaleShift = -1;
+    private java.util.List<TilePreviewSource> previewSources;
+
     private HDPerspective perspective;
     private HDShader shader;
     private HDLighting lighting;
@@ -45,15 +52,25 @@ public class HDMap extends MapType {
 
     public static final String IMGFORMAT_PNG = "png";
     public static final String IMGFORMAT_JPG = "jpg";
-    
-    
+
+
     public HDMap(DynmapCore core, ConfigurationNode configuration) {
+        this(core,configuration,core.configuration,true);
+    }
+    private HDMap(DynmapCore core,ConfigurationNode configuration,ConfigurationNode quality,boolean buildSources) {
         this.core = core;
+        ConfigurationNode sourceConfiguration = new ConfigurationNode(new java.util.LinkedHashMap<>(configuration.entries));
         name = configuration.getString("name", null);
         if(name == null) {
             Log.severe("HDMap missing required attribute 'name' - disabled");
             return;
         }
+        versionedTiles = !configuration.getBoolean("readonly", false) || configuration.getInteger("raster-layout-version", 0) >= 1;
+        HDPerspective previousPerspective = MapManager.mapman.hdmapman.perspectives.get(configuration.getString("perspective", "default"));
+        boolean defaultFormat = "default".equals(configuration.getString("image-format", "default"));
+        String previousFormat = configuration.getString("image-format", "default");
+        if(previousFormat.equals("default")) previousFormat = core.getDefImageFormat();
+        RenderQualitySettings.apply(quality, configuration, MapManager.mapman.hdmapman.perspectives.keySet());
         String perspectiveid = configuration.getString("perspective", "default");
         perspective = MapManager.mapman.hdmapman.perspectives.get(perspectiveid);
         if(perspective == null) {
@@ -95,7 +112,7 @@ public class HDMap extends MapType {
             }
         }
         prefix = configuration.getString("prefix", name);
-        
+
         /* Compute extra zoom outs needed for this map */
         double scale = perspective.getScale();
         mapzoomout = 0;
@@ -148,8 +165,57 @@ public class HDMap extends MapType {
         if (this.boostzoom > this.mapzoomin) {
             this.mapzoomin = this.boostzoom;
         }
+        if (tilescale == 0 && imgformat.getEncoding() == ImageEncoding.PNG) {
+            if (configuration.containsKey("legacy-preview-layout")) {
+                // A saved source mapping takes precedence after the upgraded perspective
+                // has been saved. Never reinterpret it as a new zero-shift migration.
+                if (TileLayout.namespace(prefix,perspective,tilescale,boostzoom,imgformat).equals(configuration.getString("legacy-preview-layout", ""))) {
+                    int saved = configuration.getInteger("legacy-preview-scale-shift", -1);
+                    if(saved >= 0 && saved <= 4) legacyScaleShift = saved;
+                    // Earlier hints described the configured grid, not the effective PNG grid.
+                    int png = configuration.getInteger("legacy-preview-png-scale-shift", TileLayout.compatibleShift(perspective, perspective));
+                    if(png >= 0 && png <= 4) legacyPngScaleShift = png;
+                }
+            } else if (previousFormat.startsWith("jpg") || previousFormat.equals("png")) {
+                legacyScaleShift = TileLayout.compatibleShift(previousPerspective, perspective);
+                // The default-format quality upgrade already produced high-detail PNGs
+                // in the unversioned directory. JPEGs still use the original grid.
+                legacyPngScaleShift = (defaultFormat || previousFormat.startsWith("jpg")) && legacyScaleShift >= 0
+                    ? TileLayout.compatibleShift(perspective, perspective) : legacyScaleShift;
+                int png = configuration.getInteger("legacy-preview-png-scale-shift", legacyPngScaleShift);
+                if(png >= -1 && png <= 4) legacyPngScaleShift = png;
+            }
+        }
+        if(buildSources && tilescale == 0 && imgformat.getEncoding() == ImageEncoding.PNG && !configuration.getBoolean("readonly",false)) {
+            if(getPrefix().equals(configuration.getString("raster-preview-layout",""))) {
+                var saved=configuration.getNodes("raster-preview-sources");
+                if(saved!=null && saved.size()<=8) {
+                    var sources=new java.util.ArrayList<TilePreviewSource>();
+                    for(var item:saved) {
+                        String source=item.getString("prefix","");int shift=item.getInteger("scale-shift",100);
+                        String encoding=item.getString("encoding","");
+                        if(!source.matches("[A-Za-z0-9_.-]{1,128}") || source.equals(".") || source.equals("..") || source.equals(getPrefix()) || shift < -4 || shift > 4)continue;
+                        if(encoding.equals("PNG")||encoding.equals("JPG"))sources.add(new TilePreviewSource(source,shift,ImageEncoding.valueOf(encoding)));
+                    }
+                    previewSources=java.util.List.copyOf(sources);
+                }
+            }
+            if(previewSources==null && quality!=null && "balanced".equalsIgnoreCase(quality.getString("render-quality",""))) {
+                var oldQuality=new ConfigurationNode(new java.util.LinkedHashMap<>(quality.entries));oldQuality.put("render-quality","high");
+                var old=new HDMap(core,sourceConfiguration,oldQuality,false);
+                int delta=TileLayout.signedCompatibleShift(old.perspective,perspective);
+                if(delta>=-4 && delta<=4 && !old.getPrefix().equals(getPrefix())) {
+                    var sources=new java.util.ArrayList<TilePreviewSource>();
+                    for(var source:old.getTilePreviewSources()) {
+                        int shift=source.scaleShift()+delta;
+                        if(shift>=-4 && shift<=4)sources.add(new TilePreviewSource(source.prefix(),shift,source.encoding()));
+                    }
+                    sources.add(new TilePreviewSource(old.getPrefix(),delta,old.getImageFormat().getEncoding()));
+                    previewSources=java.util.List.copyOf(sources);
+                }
+            }
+        }
         this.append_to_world = configuration.getString("append_to_world", "");
-        setProtected(configuration.getBoolean("protected", false));
         setTileUpdateDelay(configuration.getInteger("tileupdatedelay", -1));
         setReadOnly(configuration.getBoolean("readonly", false));
     }
@@ -161,6 +227,12 @@ public class HDMap extends MapType {
         if(icon != null)
             cn.put("icon", icon);
         cn.put("prefix", prefix);
+        if(versionedTiles) cn.put("raster-layout-version", 1);
+        if(legacyScaleShift >= 0 || legacyPngScaleShift >= 0) {cn.put("legacy-preview-layout", getPrefix());cn.put("legacy-preview-scale-shift", legacyScaleShift);cn.put("legacy-preview-png-scale-shift", legacyPngScaleShift);}
+        if(previewSources!=null) {
+            cn.put("raster-preview-layout",getPrefix());
+            cn.put("raster-preview-sources",previewSources.stream().map(source -> java.util.Map.of("prefix",source.prefix(),"scale-shift",source.scaleShift(),"encoding",source.encoding().name())).toList());
+        }
         if(perspective != null)
             cn.put("perspective", perspective.getName());
         if(shader != null)
@@ -179,14 +251,13 @@ public class HDMap extends MapType {
         if(bg_night_cfg != null)
             cn.put("backgroundnight", bg_night_cfg);
         cn.put("append_to_world", append_to_world);
-        cn.put("protected", isProtected());
         cn.put("readonly", isReadOnly());
         if(this.tileupdatedelay > 0) {
             cn.put("tileupdatedelay", this.tileupdatedelay);
         }
         return cn;
     }
-    
+
     public final HDShader getShader() { return shader; }
     public final HDPerspective getPerspective() { return perspective; }
     public final HDLighting getLighting() { return lighting; }
@@ -194,7 +265,7 @@ public class HDMap extends MapType {
     @Override
     public final int getTileSize() { return 128 << tilescale; }
     public final int getTileScale() { return tilescale; }
-    
+
     @Override
     public List<TileFlags.TileCoord> getTileCoords(DynmapWorld w, int x, int y, int z) {
         return perspective.getTileCoords(w, x, y, z, tilescale);
@@ -209,7 +280,7 @@ public class HDMap extends MapType {
     public MapTile[] getAdjecentTiles(MapTile tile) {
         return perspective.getAdjecentTiles(tile);
     }
-    
+
     @Override
     public List<DynmapChunk> getRequiredChunks(MapTile tile) {
         return perspective.getRequiredChunks(tile);
@@ -225,11 +296,17 @@ public class HDMap extends MapType {
     public String getName() {
         return name;
     }
-    
+
     @Override
     public String getPrefix() {
-        return prefix;
+        if (!versionedTiles) return prefix;
+        if(rasterPrefix == null) rasterPrefix = TileLayout.namespace(prefix,perspective,tilescale,boostzoom,imgformat);
+        return rasterPrefix;
     }
+    @Override public java.util.List<TilePreviewSource> getTilePreviewSources() {return previewSources==null ? super.getTilePreviewSources() : previewSources;}
+    @Override public String getLegacyTilePrefix() { return legacyScaleShift >= 0 || legacyPngScaleShift >= 0 ? prefix : null; }
+    @Override public int getLegacyTileScaleShift() {return legacyScaleShift;}
+    @Override public int getLegacyTileScaleShift(ImageEncoding encoding) {return encoding == ImageEncoding.PNG ? legacyPngScaleShift : legacyScaleShift;}
 
     /* Get maps rendered concurrently with this map in this world */
     @Override
@@ -245,7 +322,7 @@ public class HDMap extends MapType {
         }
         return maps;
     }
-    
+
     /* Get names of maps rendered concurrently with this map type in this world */
     @Override
     public List<String> getMapNamesSharingRender(DynmapWorld w) {
@@ -266,7 +343,7 @@ public class HDMap extends MapType {
 
     @Override
     public ImageFormat getImageFormat() { return imgformat; }
-    
+
     @Override
     public void buildClientConfiguration(JSONObject worldObject, DynmapWorld world) {
         JSONObject o = new JSONObject();
@@ -274,7 +351,7 @@ public class HDMap extends MapType {
         s(o, "name", name);
         s(o, "title", title);
         s(o, "icon", icon);
-        s(o, "prefix", prefix);
+        s(o, "prefix", getPrefix());
         s(o, "background", bg_cfg);
         s(o, "backgroundday", bg_day_cfg);
         s(o, "backgroundnight", bg_night_cfg);
@@ -282,19 +359,18 @@ public class HDMap extends MapType {
         s(o, "mapzoomout", (world.getExtraZoomOutLevels()+mapzoomout));
         s(o, "mapzoomin", mapzoomin);
         s(o, "boostzoom", boostzoom);
-        s(o, "tilescale", tilescale);        
-        s(o, "protected", isProtected());
+        s(o, "tilescale", tilescale);
         s(o, "image-format", imgformat.getFileExt());
         if(append_to_world.length() > 0)
             s(o, "append_to_world", append_to_world);
         perspective.addClientConfiguration(o);
         shader.addClientConfiguration(o);
         lighting.addClientConfiguration(o);
-        
+
         a(worldObject, "maps", o);
 
     }
-    
+
     private static int parseColor(String c) {
         int v = 0;
         if(c.startsWith("#")) {
@@ -319,21 +395,22 @@ public class HDMap extends MapType {
 
         return v;
     }
-    
+
     @Override
     public int getBackgroundARGBDay() {
         return bgcolorday;
     }
-    
+
     @Override
     public int getBackgroundARGBNight() {
         return bgcolornight;
     }
-    
+
     @Override
     public void purgeOldTiles(final DynmapWorld world, final TileFlags rendered) {
         final MapStorage ms = world.getMapStorage();
-        ms.enumMapTiles(world, this, (MapStorageTile tile, ImageEncoding fmt) -> {
+        try {org.dynmap.TileScanJournal.run(world,this,"purge-"+Integer.toHexString(rendered.save().hashCode()),tile -> {
+            ImageEncoding fmt=getImageFormat().getEncoding();
             if (fmt != getImageFormat().getEncoding()) { // Wrong format?  toss it
                 /* Otherwise, delete tile */
                 tile.delete();
@@ -356,9 +433,10 @@ public class HDMap extends MapType {
                 MapManager.mapman.pushUpdate(world, new Client.Tile(tile.getURI()));
                 tile.enqueueZoomOutUpdate();
             }
-        });
+        },()->{var n=new org.dynmap.ConfigurationNode();var state=world.getMapState(this);if(state!=null)n.put("zoom",state.saveZoomOut());return n;},saved->{var state=world.getMapState(this);if(state!=null)state.mergeZoomOut(saved.getList("zoom"));},()->{if(!MapManager.mapman.checkpointWorld(world))throw new IllegalStateException("Zoom queue checkpoint failed");});}
+        catch(java.io.IOException failure){org.dynmap.Log.warning("Tile cleanup paused; previous scan checkpoint retained");}
     }
-    
+
     public String getTitle() {
         return title;
     }
@@ -368,15 +446,15 @@ public class HDMap extends MapType {
     public String getIcon() {
         return (icon == null)?"":icon;
     }
-    
+
     public boolean setPrefix(String s) {
         if(!s.equals(prefix)) {
-            prefix = s;
+            prefix = s; rasterPrefix = null; legacyScaleShift = legacyPngScaleShift = -1; previewSources = null;
             return true;
         }
         return false;
     }
-    
+
     public boolean setTitle(String s) {
         if(!s.equals(title)) {
             title = s;
@@ -411,21 +489,21 @@ public class HDMap extends MapType {
     }
     public boolean setBoostZoom(int mzi) {
         if(mzi != this.boostzoom) {
-            this.boostzoom = mzi;
+            this.boostzoom = mzi; rasterPrefix = null; legacyScaleShift = legacyPngScaleShift = -1; previewSources = null;
             return true;
         }
         return false;
     }
     public boolean setTileScale(int mzi) {
         if(mzi != this.tilescale) {
-            this.tilescale = mzi;
+            this.tilescale = mzi; rasterPrefix = null; legacyScaleShift = legacyPngScaleShift = -1; previewSources = null;
             return true;
         }
         return false;
     }
     public boolean setPerspective(HDPerspective p) {
         if(perspective != p) {
-            perspective = p;
+            perspective = p; rasterPrefix = null; legacyScaleShift = legacyPngScaleShift = -1; previewSources = null;
             return true;
         }
         return false;
@@ -452,7 +530,7 @@ public class HDMap extends MapType {
             else
                 newfmt = MapType.ImageFormat.fromID(f);
             if(newfmt != null) {
-                imgformat = newfmt;
+                imgformat = newfmt; rasterPrefix = null; legacyScaleShift = legacyPngScaleShift = -1; previewSources = null;
                 imgfmtstring = f;
                 return true;
             }
@@ -472,9 +550,9 @@ public class HDMap extends MapType {
     public void addMapTiles(List<MapTile> list, DynmapWorld w, int tx, int ty) {
         list.add(new HDMapTile(w, this.perspective, tx, ty, boostzoom, tilescale));
     }
-    
+
     private static final ImageVariant[] dayVariant = { ImageVariant.STANDARD, ImageVariant.DAY };
-    
+
     @Override
     public ImageVariant[] getVariants() {
         if (lighting.isNightAndDayEnabled())

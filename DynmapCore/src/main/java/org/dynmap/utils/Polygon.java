@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.utils;
 
 import java.util.ArrayList;
@@ -132,5 +133,19 @@ public class Polygon {
             rslt.v = newpoly;
         }
         return rslt;
+    }
+    @Override public boolean equals(Object other) {
+        if (this == other) return true;
+        if (!(other instanceof Polygon polygon) || size() != polygon.size()) return false;
+        for (int i = 0; i < size(); i++) {
+            Point2D a = getVertex(i), b = polygon.getVertex(i);
+            if (Double.compare(a.x, b.x) != 0 || Double.compare(a.y, b.y) != 0) return false;
+        }
+        return true;
+    }
+    @Override public int hashCode() {
+        int hash = 1;
+        for (Point2D point : v) hash = 31 * hash + java.util.Objects.hash(point.x, point.y);
+        return hash;
     }
 }

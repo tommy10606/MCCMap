@@ -41,9 +41,9 @@ class MarkerImpl implements Marker {
     MarkerImpl(String id, String lbl, boolean markup, String world, double x, double y, double z, MarkerIconImpl icon, boolean persistent, MarkerSetImpl set) {
         markerid = id;
         if(lbl != null)
-            label = markup ? lbl : Client.encodeForHTML(lbl);
+            label = markup ? Client.sanitizeHTML(lbl) : Client.encodeForHTML(lbl);
         else
-            label = markup ? id : Client.encodeForHTML(lbl);
+            label = markup ? Client.sanitizeHTML(id) : Client.encodeForHTML(id);
         this.markup = markup;
         this.x = x; this.y = y; this.z = z;
         this.world = world;
@@ -78,14 +78,14 @@ class MarkerImpl implements Marker {
     boolean loadPersistentData(ConfigurationNode node, boolean isSafe) {
         markup = node.getBoolean("markup", false);
         label = MarkerAPIImpl.escapeForHTMLIfNeeded(node.getString("label", markerid), markup);
-        if (!isSafe) label = Client.sanitizeHTML(label);
+        label = Client.sanitizeHTML(label);
         x = node.getDouble("x", 0);
         y = node.getDouble("y", 64);
         z = node.getDouble("z", 0);
         world = node.getString("world", "world");
         normalized_world = DynmapWorld.normalizeWorldName(world);
         desc = node.getString("desc", null);
-        if (!isSafe) desc = Client.sanitizeHTML(desc);
+        desc = Client.sanitizeHTML(desc);
         minzoom = node.getInteger("minzoom", -1);
         maxzoom = node.getInteger("maxzoom", -1);
         icon = MarkerAPIImpl.getMarkerIconImpl(node.getString("icon", MarkerIcon.DEFAULT)); 

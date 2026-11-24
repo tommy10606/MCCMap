@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import java.io.BufferedInputStream;
@@ -37,7 +38,7 @@ public class ConfigurationNode implements Map<String, Object> {
     public Map<String, Object> entries;
     private File f;
     private Yaml yaml;
-    
+
     public ConfigurationNode() {
         entries = new LinkedHashMap<String, Object>();
     }
@@ -51,7 +52,7 @@ public class ConfigurationNode implements Map<String, Object> {
             options.setPrettyFlow(true);
             options.setVersion(DumperOptions.Version.V1_1);
 
-            yaml = new Yaml(new SafeConstructor(), new EmptyNullRepresenter(), options);
+            yaml = new Yaml(new SafeConstructor(new org.yaml.snakeyaml.LoaderOptions()), new EmptyNullRepresenter(options), options);
         }
     }
 
@@ -59,14 +60,14 @@ public class ConfigurationNode implements Map<String, Object> {
         this.f = f;
         entries = new LinkedHashMap<String, Object>();
     }
-    
+
     public ConfigurationNode(Map<String, Object> map) {
         if (map == null) {
             throw new IllegalArgumentException();
         }
         entries = map;
     }
-    
+
     public ConfigurationNode(InputStream in) {
         load(in);
     }
@@ -74,13 +75,13 @@ public class ConfigurationNode implements Map<String, Object> {
     @SuppressWarnings("unchecked")
     public boolean load(InputStream in) {
         initparse();
-        
+
         Object o = yaml.load(new UnicodeReader(in));
         if((o != null) && (o instanceof Map))
             entries = (Map<String, Object>)o;
         return (entries != null);
     }
-    
+
     @SuppressWarnings("unchecked")
     public boolean load() {
         initparse();
@@ -111,7 +112,7 @@ public class ConfigurationNode implements Map<String, Object> {
     public boolean save() {
         return save(f);
     }
-    
+
     public boolean save(File file) {
         initparse();
 
@@ -147,7 +148,7 @@ public class ConfigurationNode implements Map<String, Object> {
         Object v = get(path);
         int separator = path.indexOf('/');
         if ((v != null) || (separator < 0)) return v;
-        
+
         String localKey = path.substring(0, separator);
         Object subvalue = get(localKey);
         if (subvalue == null)
@@ -160,19 +161,19 @@ public class ConfigurationNode implements Map<String, Object> {
         } catch (ClassCastException e) {
             return null;
         }
-        
+
         String subpath = path.substring(separator + 1);
         return new ConfigurationNode(submap).getObject(subpath);
-        
+
     }
-    
+
     public Object getObject(String path, Object def) {
         Object o = getObject(path);
         if (o == null)
             return def;
         return o;
     }
-    
+
     @SuppressWarnings("unchecked")
     public <T> T getGeneric(String path, T def) {
         Object o = getObject(path, def);
@@ -182,31 +183,31 @@ public class ConfigurationNode implements Map<String, Object> {
             return def;
         }
     }
-    
+
     public int getInteger(String path, int def) {
         return Integer.parseInt(getObject(path, def).toString());
     }
-    
+
     public double getLong(String path, long def) {
         return Long.parseLong(getObject(path, def).toString());
     }
-    
+
     public float getFloat(String path, float def) {
         return Float.parseFloat(getObject(path, def).toString());
     }
-    
+
     public double getDouble(String path, double def) {
         return Double.parseDouble(getObject(path, def).toString());
     }
-    
+
     public boolean getBoolean(String path, boolean def) {
         return Boolean.parseBoolean(getObject(path, def).toString());
     }
-    
+
     public String getString(String path) {
         return getString(path, null);
     }
-    
+
     public List<String> getStrings(String path, List<String> def) {
         Object o = getObject(path);
         if (!(o instanceof List<?>)) {
@@ -218,7 +219,7 @@ public class ConfigurationNode implements Map<String, Object> {
         }
         return strings;
     }
-    
+
     public String getString(String path, String def) {
         Object o = getObject(path, def);
         if (o == null)
@@ -262,7 +263,7 @@ public class ConfigurationNode implements Map<String, Object> {
     public List<Map<String,Object>> getMapList(String path) {
         return getList(path);
     }
-    
+
     public ConfigurationNode getNode(String path) {
         Map<String, Object> v = null;
         v = getGeneric(path, v);
@@ -270,14 +271,14 @@ public class ConfigurationNode implements Map<String, Object> {
             return null;
         return new ConfigurationNode(v);
     }
-    
+
     @SuppressWarnings("unchecked")
     public List<ConfigurationNode> getNodes(String path) {
         List<Object> o = getList(path);
 
         if(o == null)
             return new ArrayList<ConfigurationNode>();
-        
+
         ArrayList<ConfigurationNode> nodes = new ArrayList<ConfigurationNode>();
         for(Object i : (List<?>)o) {
             if (i instanceof Map<?, ?>) {
@@ -292,12 +293,12 @@ public class ConfigurationNode implements Map<String, Object> {
         }
         return nodes;
     }
-    
+
     public void extend(Map<String, Object> other) {
         if (other != null)
             extendMap(this, other);
     }
-    
+
     private final static Object copyValue(Object v) {
         if(v instanceof Map) {
             @SuppressWarnings("unchecked")
@@ -330,16 +331,16 @@ public class ConfigurationNode implements Map<String, Object> {
             original.put(key, copyValue(value));
         }
     }
-    
+
     public <T> T createInstance(Class<?>[] constructorParameters, Object[] constructorArguments) {
         String typeName = getString("class");
         try {
             Class<?> mapTypeClass = Class.forName(typeName);
-        
+
             Class<?>[] constructorParameterWithConfiguration = new Class<?>[constructorParameters.length+1];
             for(int i = 0; i < constructorParameters.length; i++) { constructorParameterWithConfiguration[i] = constructorParameters[i]; }
             constructorParameterWithConfiguration[constructorParameterWithConfiguration.length-1] = ConfigurationNode.class;
-            
+
             Object[] constructorArgumentsWithConfiguration = new Object[constructorArguments.length+1];
             for(int i = 0; i < constructorArguments.length; i++) { constructorArgumentsWithConfiguration[i] = constructorArguments[i]; }
             constructorArgumentsWithConfiguration[constructorArgumentsWithConfiguration.length-1] = this;
@@ -354,7 +355,7 @@ public class ConfigurationNode implements Map<String, Object> {
         }
         return null;
     }
-    
+
     public <T> List<T> createInstances(String path, Class<?>[] constructorParameters, Object[] constructorArguments) {
         List<ConfigurationNode> nodes = getNodes(path);
         List<T> instances = new ArrayList<T>();
@@ -426,11 +427,11 @@ public class ConfigurationNode implements Map<String, Object> {
     public Set<java.util.Map.Entry<String, Object>> entrySet() {
         return entries.entrySet();
     }
-    
+
     private class EmptyNullRepresenter extends Representer {
 
-        public EmptyNullRepresenter() {
-            super();
+        public EmptyNullRepresenter(DumperOptions options) {
+            super(options);
             this.nullRepresenter = new EmptyRepresentNull();
         }
 

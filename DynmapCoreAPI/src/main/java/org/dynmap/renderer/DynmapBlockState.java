@@ -1,3 +1,4 @@
+// Modified for MCCMap: preserve native defaults when decoding chunk palettes (2026).
 package org.dynmap.renderer;
 
 import java.util.Arrays;
@@ -17,6 +18,12 @@ public class DynmapBlockState {
     public final int stateIndex;
     // Base block state (state index = 0) - first state for block corresponding to the block for this state
     public final DynmapBlockState baseState;
+    private volatile DynmapBlockState defaultState;
+    /** Native default state, which need not be the first state in the registry. */
+    public final DynmapBlockState getDefaultState() {
+        return baseState.defaultState == null ? baseState : baseState.defaultState;
+    }
+    public final void setAsDefaultState() { baseState.defaultState = this; }
     // Block name (minecraft:name for vanilla, modid:name for custom)
     public final String blockName;
     // Block state string (attrib=value, attrib=value, etc for 1.13+, meta=value for 1.12 or earlier)

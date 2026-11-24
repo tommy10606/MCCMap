@@ -90,7 +90,7 @@ class PolyLineMarkerImpl implements PolyLineMarker {
     boolean loadPersistentData(ConfigurationNode node, boolean isSafe) {
         markup = node.getBoolean("markup", false);
         label = MarkerAPIImpl.escapeForHTMLIfNeeded(node.getString("label", markerid), markup);
-        if (!isSafe) label = Client.sanitizeHTML(label);
+        label = Client.sanitizeHTML(label);
         List<Double> xx = node.getList("x");
         List<Double> yy = node.getList("y");
         List<Double> zz = node.getList("z");
@@ -103,7 +103,7 @@ class PolyLineMarkerImpl implements PolyLineMarker {
         world = node.getString("world", "world");
         normalized_world = DynmapWorld.normalizeWorldName(world);
         desc = node.getString("desc", null);
-        if (!isSafe) desc = Client.sanitizeHTML(desc);
+        desc = Client.sanitizeHTML(desc);
         lineweight = node.getInteger("strokeWeight", -1);
         if(lineweight == -1) {	/* Handle typo-saved value */
         	 lineweight = node.getInteger("stokeWeight", 3);

@@ -1,3 +1,4 @@
+/* Modified for MCCMap: Paper-only support and a read-only website (2026). */
 /* Embedded into website */
 
 #mcmap {
@@ -5,11 +6,11 @@
     height: 500px;
 }
 
-.dynmap .sidebar {
+.mccmap .sidebar {
     width: 140px; /* original width 200px */
     margin-right: -143px; /* original margin 203px, sidebar width +2xborder 1px +1px to hide */
 }
 
-.dynmap .hitbar {
+.mccmap .hitbar {
     right: 140px; /* width of sidebar */
 }

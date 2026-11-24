@@ -1,3 +1,4 @@
+// Modified for MCCMap: independent Paper fork (2026).
 package org.dynmap.utils;
 
 import org.dynmap.Log;
@@ -99,9 +100,9 @@ public class PatchDefinition implements RenderPatch {
     	if (rotorigin == null) rotorigin = offsetCenter;
     	/* Precompute trig once - reused for all three vector rotations */
     	double sinX = 0, cosX = 1, sinY = 0, cosY = 1, sinZ = 0, cosZ = 1;
-    	if (rotatex != 0) { double r = Math.toRadians(rotatex); sinX = Math.sin(r); cosX = Math.cos(r); }
-    	if (rotatey != 0) { double r = Math.toRadians(rotatey); sinY = Math.sin(r); cosY = Math.cos(r); }
-    	if (rotatez != 0) { double r = Math.toRadians(rotatez); sinZ = Math.sin(r); cosZ = Math.cos(r); }
+        if (rotatex != 0) { double r = Math.toRadians(rotatex); sinX = exactTrig(Math.sin(r)); cosX = exactTrig(Math.cos(r)); }
+        if (rotatey != 0) { double r = Math.toRadians(rotatey); sinY = exactTrig(Math.sin(r)); cosY = exactTrig(Math.cos(r)); }
+        if (rotatez != 0) { double r = Math.toRadians(rotatez); sinZ = exactTrig(Math.sin(r)); cosZ = exactTrig(Math.cos(r)); }
         Vector3D vec = new Vector3D(orig.x0, orig.y0, orig.z0);
         rotatePrecomputed(vec, sinX, cosX, sinY, cosY, sinZ, cosZ, rotorigin); /* Rotate origin */
         x0 = vec.x; y0 = vec.y; z0 = vec.z;
@@ -123,6 +124,13 @@ public class PatchDefinition implements RenderPatch {
         u = new Vector3D();
         v = new Vector3D();
         update();
+    }
+
+    private static double exactTrig(double value) {
+        if (Math.abs(value) < 1.0e-12) return 0;
+        if (Math.abs(value - 1) < 1.0e-12) return 1;
+        if (Math.abs(value + 1) < 1.0e-12) return -1;
+        return value;
     }
 
     private static void rotatePrecomputed(Vector3D vec,
@@ -232,25 +240,25 @@ public class PatchDefinition implements RenderPatch {
         boolean good = true;
         // Compute visible corners to see if we're inside cube (u.x = xu-x0, v.x = xv-x0)
         double xx0 = x0 + u.x * umin + v.x * vmin;
-        double xx1 = x0 + u.x * vmin + v.x * vmax;
-        double xx2 = x0 + u.x * umax + v.x * vmin;
-        double xx3 = x0 + u.x * vmax + v.x * vmax;
+        double xx1 = x0 + u.x * umin + v.x * vmax;
+        double xx2 = x0 + u.x * umax + v.x * vminatumax;
+        double xx3 = x0 + u.x * umax + v.x * vmaxatumax;
         if (outOfRange(xx0) || outOfRange(xx1) || outOfRange(xx2) || outOfRange(xx3)) {
             Log.verboseinfo(String.format("Invalid visible range xu=[%f:%f], xv=[%f:%f]", xx0, xx2, xx1, xx3));
             good = false;
         }
         double yy0 = y0 + u.y * umin + v.y * vmin;
-        double yy1 = y0 + u.y * vmin + v.y * vmax;
-        double yy2 = y0 + u.y * umax + v.y * vmin;
-        double yy3 = y0 + u.y * vmax + v.y * vmax;
+        double yy1 = y0 + u.y * umin + v.y * vmax;
+        double yy2 = y0 + u.y * umax + v.y * vminatumax;
+        double yy3 = y0 + u.y * umax + v.y * vmaxatumax;
         if (outOfRange(yy0) || outOfRange(yy1) || outOfRange(yy2) || outOfRange(yy3)) {
             Log.verboseinfo(String.format("Invalid visible range yu=[%f:%f], yv=[%f:%f]", yy0, yy2, yy1, yy3));
             good = false;
         }
         double zz0 = z0 + u.z * umin + v.z * vmin;
-        double zz1 = z0 + u.z * vmin + v.z * vmax;
-        double zz2 = z0 + u.z * umax + v.z * vmin;
-        double zz3 = z0 + u.z * vmax + v.z * vmax;
+        double zz1 = z0 + u.z * umin + v.z * vmax;
+        double zz2 = z0 + u.z * umax + v.z * vminatumax;
+        double zz3 = z0 + u.z * umax + v.z * vmaxatumax;
         if (outOfRange(zz0) || outOfRange(zz1) || outOfRange(zz2) || outOfRange(zz3)) {
             Log.verboseinfo(String.format("Invalid visible range zu=[%f:%f], zv=[%f:%f]", zz0, zz2, zz1, zz3));
             good = false;

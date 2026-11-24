@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.common;
 
 import java.io.File;
@@ -19,6 +20,10 @@ import org.dynmap.utils.MapChunkCache;
  * services.  Platform-specific plugin must supply DynmapCore with an instance of an object implementing this interface.
  */
 public abstract class DynmapServerInterface {
+    public org.dynmap.utils.Polygon getMapWorldBorder(DynmapWorld world) {return world.getWorldBorder();}
+    public org.dynmap.MissingTileCheck.Snapshot getRenderCheckSnapshot(DynmapWorld world) {
+        return new org.dynmap.MissingTileCheck.Snapshot(null, java.util.List.of(), world.getWorldBorder());
+    }
     /**
      * Schedule task to run on server-safe thread (one suitable for other server API calls)
      * @param run - runnable method
@@ -53,7 +58,7 @@ public abstract class DynmapServerInterface {
      * @return player (offline or not)
      */
     public abstract DynmapPlayer getOfflinePlayer(String name);
-    
+
     /**
      * Get banned IPs
      * @return set of banned IPs
@@ -64,12 +69,7 @@ public abstract class DynmapServerInterface {
      * @return server name
      */
     public abstract String getServerName();
-    /**
-     * Test if player ID is banned
-     * @param pid - player ID
-     * @return true if banned
-     */
-    public abstract boolean isPlayerBanned(String pid);    
+
     /**
      * Strip out chat color
      * @param s - string to strip
@@ -82,19 +82,8 @@ public abstract class DynmapServerInterface {
      * @return true if successful
      */
     public abstract boolean requestEventNotification(EventType type);
-    /**
-     * Send notification of web chat message
-     * @param source - source
-     * @param name - name
-     * @param msg - message text
-     * @return true if not cancelled
-     */
-    public abstract boolean sendWebChatEvent(String source, String name, String msg);
-    /**
-     * Broadcast message to players
-     * @param msg - message
-     */
-    public abstract void broadcastMessage(String msg);
+
+
     /**
      * Get Biome ID lis
      * @return list of biome IDs
@@ -115,13 +104,7 @@ public abstract class DynmapServerInterface {
      * @return world object, or null if not found
      */
     public abstract DynmapWorld getWorldByName(String wname);
-    /**
-     * Test which of given set of permisssions a possibly offline user has
-     * @param player - player
-     * @param perms - set of permission IDs
-     * @return set of permission IDs allowed to player
-     */
-    public abstract Set<String> checkPlayerPermissions(String player, Set<String> perms);
+
     /**
      * Test single permission attribute
      * @param player - player
@@ -139,7 +122,7 @@ public abstract class DynmapServerInterface {
      * @param rawbiome - include raw biome data, if true
      * @return chunk map
      */
-    public abstract MapChunkCache createMapChunkCache(DynmapWorld w, List<DynmapChunk> chunks, 
+    public abstract MapChunkCache createMapChunkCache(DynmapWorld w, List<DynmapChunk> chunks,
         boolean blockdata, boolean highesty, boolean biome, boolean rawbiome);
     /**
      * Get maximum player count
@@ -161,7 +144,7 @@ public abstract class DynmapServerInterface {
     }
     /**
      * Get version of mod with given name
-     * 
+     *
      * @param name - name of mod
      * @return version, or null of not found
      */
@@ -194,7 +177,7 @@ public abstract class DynmapServerInterface {
     public abstract double getServerTPS();
     /**
      * Get address configured for server
-     * 
+     *
      * @return "" or null if none configured
      */
     public abstract String getServerIP();

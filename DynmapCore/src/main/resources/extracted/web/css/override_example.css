@@ -1,3 +1,4 @@
+/* Modified for MCCMap: Paper-only support and a read-only website (2026). */
 /*******************
  * This is the over-ride CSS file.
  *
@@ -27,13 +28,13 @@
 
 /* These next two keep the DynMap sidebar open... */
 
-.dynmap .sidebar {
+.mccmap .sidebar {
 	margin-right: 0px;
 }
 
 /* ...and hide the hitbar along with the sidebar controls */
 
-.dynmap .sidebar .hitbar,
-.dynmap .sidebar .panel > .pin {
+.mccmap .sidebar .hitbar,
+.mccmap .sidebar .panel > .pin {
 	display: none;
 }

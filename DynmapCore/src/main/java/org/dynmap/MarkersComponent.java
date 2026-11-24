@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap;
 
 import java.util.ArrayList;
@@ -38,17 +39,18 @@ public class MarkersComponent extends ClientComponent {
     private HashMap<String, Long> offline_times = new HashMap<String, Long>();
     private static final String OFFLINE_PLAYERS_SETID = "offline_players";
     private static final String PLAYER_SPAWN_BED_SETID = "spawn_beds";
-    
+
     public MarkersComponent(final DynmapCore core, ConfigurationNode configuration) {
         super(core, configuration);
-        
+
         api = core.getMarkerAPI();
-        
+
         /* If configuration has enabled sign support, prime it too */
         if(configuration.getBoolean("enablesigns", false)) {
             signmgr = MarkerSignManager.initializeSignManager(core, configuration.getString("default-sign-set", MarkerSet.DEFAULT));
         }
-        showBorder = configuration.getBoolean("showworldborder", false);
+        showBorder = configuration.getBoolean("showworldborder", true)
+            && core.configuration.getString("world-border/source", "worldborder").equalsIgnoreCase("vanilla");
         showSpawn = configuration.getBoolean("showspawn", false);
         /* If we're posting spawn point markers, initialize and add world listener */
         if(showSpawn) {
@@ -75,7 +77,7 @@ public class MarkersComponent extends ClientComponent {
             core.listenerManager.addListener(EventType.WORLD_LOAD, wel);
             /* Add listener for spawn changes */
             core.listenerManager.addListener(EventType.WORLD_SPAWN_CHANGE, wel);
-            
+
             /* Initialize already loaded worlds */
             for(DynmapWorld w : core.getMapManager().getWorlds()) {
                 DynmapLocation loc = w.getSpawnLocation();
@@ -93,13 +95,13 @@ public class MarkersComponent extends ClientComponent {
             offlineset.setHideByDefault(configuration.getBoolean("offlinehidebydefault", true));
             offlineset.setMinZoom(configuration.getInteger("offlineminzoom", 0));
             maxofflineage = 60000L * configuration.getInteger("maxofflinetime", 30); /* 30 minutes */
-            /* Now, see if existing offline markers - check for last login on their users */
+            /* Now, see if existing offline markers - check for last seen times of their players */
             if(maxofflineage > 0) {
                 Set<Marker> prev_m = offlineset.getMarkers();
                 for(Marker m : prev_m) {
                     DynmapPlayer p = core.getServer().getOfflinePlayer(m.getMarkerID());
                     if(p != null) {
-                        long ageout = p.getLastLoginTime() + maxofflineage;
+                        long ageout = p.getLastSeenTime() + maxofflineage;
                         if(ageout < System.currentTimeMillis()) {
                             m.deleteMarker();
                         }
@@ -178,14 +180,14 @@ public class MarkersComponent extends ClientComponent {
             }
             spawnbedset.setHideByDefault(configuration.getBoolean("spawnbedhidebydefault", true));
             spawnbedset.setMinZoom(configuration.getInteger("spawnbedminzoom", 0));
-            
+
             spawnbedicon = api.getMarkerIcon(configuration.getString("spawnbedicon", "bed"));
             spawnbedformat = configuration.getString("spawnbedformat", "%name%'s bed");
             removebedonplayerleave = configuration.getBoolean("spawnbedremoveonplayerleave", true);
             /* Add listener for players coming and going */
             core.listenerManager.addListener(EventType.PLAYER_JOIN, new PlayerEventListener() {
                 @Override
-                public void playerEvent(DynmapPlayer p) {                    
+                public void playerEvent(DynmapPlayer p) {
                     updatePlayer(p);
                 }
             });
@@ -202,7 +204,7 @@ public class MarkersComponent extends ClientComponent {
             }
             core.listenerManager.addListener(EventType.PLAYER_BED_LEAVE, new PlayerEventListener() {
                 @Override
-                public void playerEvent(final DynmapPlayer p) {                    
+                public void playerEvent(final DynmapPlayer p) {
                     core.getServer().scheduleServerTask(new Runnable() {
                         public void run() {
                             updatePlayer(p);
@@ -219,7 +221,7 @@ public class MarkersComponent extends ClientComponent {
             }
         }
     }
-    
+
     private void updatePlayer(DynmapPlayer p) {
         DynmapLocation bl = p.getBedSpawnLocation();
         Marker m = spawnbedset.findMarker(p.getName()+"_bed");
@@ -238,7 +240,7 @@ public class MarkersComponent extends ClientComponent {
         }
     }
 
-    
+
     private void addUpdateWorld(DynmapWorld w, DynmapLocation loc) {
         MarkerSet ms = api.getMarkerSet(MarkerSet.DEFAULT);
         if(ms != null) {

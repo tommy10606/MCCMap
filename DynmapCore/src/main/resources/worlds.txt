@@ -1,9 +1,10 @@
+# Modified for MCCMap: independent Paper fork (2026).
 # These are examples of world-specific settings - customize your content as you see fit
 #
 # NOTES:
 #   All lines here are commented with the # symbol - delete the # symbol on copied lines you wish to enable
 #   Definitions of a world made here will superecede any world definition with the same name in configuration.txt
-#   Deleting this file will result in a fresh copy being produced by dynmap.jar on the next startup.
+#   Deleting this file will result in a fresh copy being produced by mccmap.jar on the next startup.
 #
 worlds:
   # Worlds can be handled by templates, based on world type
@@ -52,7 +53,7 @@ worlds:
   #   Use 'template: mycustomtemplate' to use the properties specified in the template 'mycustomtemplate' to this world. Default it is set to the environment-name (normal or nether).
   #  template: mycustomtemplate
   #   Rest of comes from template - uncomment to tailor for world specifically
-  #  # World center - default is spawn point
+  #  # Initial map center - default is X=0, Z=0 at the world's sea level
   #  center:
   #    x: 0
   #    y: 64
@@ -91,7 +92,7 @@ worlds:
   #      lighting: default
   #      mapzoomin: 3
   #      # maps can be set to `readonly: false` to prevent updates
-  #      readonly: false 
+  #      readonly: false
   #
   # To just label world, and inherit rest from template, just provide name and title
   #- name: world2

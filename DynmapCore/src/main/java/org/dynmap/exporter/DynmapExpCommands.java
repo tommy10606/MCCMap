@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.exporter;
 
 import java.io.File;
@@ -18,7 +19,7 @@ import org.dynmap.common.DynmapPlayer;
 import org.dynmap.hdmap.HDShader;
 
 /**
- * Handler for export commands (/dynmapexp)
+ * Handler for export commands (/mccmapexport)
  */
 public class DynmapExpCommands {
     private HashMap<String, ExportContext> sessions = new HashMap<String, ExportContext>();
@@ -45,10 +46,10 @@ public class DynmapExpCommands {
         }
         return id;
     }
-    
+
     private ExportContext getContext(DynmapCommandSender sender) {
         String id = getContextID(sender);
-        
+
         ExportContext ctx = sessions.get(id);
         if (ctx == null) {
             ctx = new ExportContext();
@@ -56,19 +57,19 @@ public class DynmapExpCommands {
         }
         return ctx;
     }
-    
+
     public boolean processCommand(DynmapCommandSender sender, String cmd, String commandLabel, String[] args, DynmapCore core) {
         /* Re-parse args - handle doublequotes */
         args = DynmapCore.parseArgs(args, sender);
         if(args.length < 1)
             return false;
-        if(!core.checkPlayerPermission(sender, "dynmapexp.export")) {
+        if(!core.checkPlayerPermission(sender, "mccmapexport.export")) {
             return true;
         }
         cmd = args[0];
         boolean rslt = false;
         ExportContext ctx = getContext(sender);
-        
+
         if(cmd.equalsIgnoreCase("set")) {
             rslt = handleSetExport(sender, args, ctx, core);
         }
@@ -99,13 +100,13 @@ public class DynmapExpCommands {
 
     public List<String> getTabCompletions(DynmapCommandSender sender, String[] args, DynmapCore core) {
         /* Re-parse args - handle doublequotes */
-		args = DynmapCore.parseArgs(args, sender, true);
+        args = DynmapCore.parseArgs(args, sender, true);
 
-		if (args == null || args.length <= 1) {
-			return Collections.emptyList();
-		}
+        if (args == null || args.length <= 1) {
+            return Collections.emptyList();
+        }
 
-		String cmd = args[0];
+        String cmd = args[0];
 
         if(cmd.equalsIgnoreCase("set")) {
             List<String> keys = new ArrayList<>(
@@ -150,7 +151,7 @@ public class DynmapExpCommands {
         sender.sendMessage(String.format("groups: byChunk: %b, byBlockID: %b, byBlockIDData: %b, byTexture: %b", ctx.groupByChunk, ctx.groupByBlockID, ctx.groupByBlockIDData, ctx.groupByTexture));
         return true;
     }
-    
+
     private boolean handleSetExport(DynmapCommandSender sender, String[] args, ExportContext ctx, DynmapCore core) {
         if (args.length < 3) {
             sender.sendMessage(String.format("Bounds: <%s,%s,%s> - <%s,%s,%s> on world '%s'", val(ctx.xmin), val(ctx.ymin), val(ctx.zmin),
@@ -283,12 +284,12 @@ public class DynmapExpCommands {
             ctx.zmax = (int)Math.floor(loc.z);
         }
         ctx.world = world.getName();
-        
+
         return handleInfo(sender, args, ctx, core);
     }
-    
+
     private boolean handleDoExport(DynmapCommandSender sender, String[] args, ExportContext ctx, DynmapCore core) {
-        if ((ctx.world == null) || (ctx.xmin == Integer.MIN_VALUE) || (ctx.ymin == Integer.MIN_VALUE) || 
+        if ((ctx.world == null) || (ctx.xmin == Integer.MIN_VALUE) || (ctx.ymin == Integer.MIN_VALUE) ||
             (ctx.zmin == Integer.MIN_VALUE) || (ctx.xmax == Integer.MIN_VALUE) || (ctx.ymax == Integer.MIN_VALUE) ||
             (ctx.zmax == Integer.MIN_VALUE)) {
             sender.sendMessage("Bounds not set");
@@ -304,8 +305,8 @@ public class DynmapExpCommands {
             sender.sendMessage("Invalid shader - " + ctx.shader);
             return true;
         }
-        
-        String basename = "dynmapexp";
+
+        String basename = "mccmapexport";
         if (args.length > 1) {
             basename = args[1];
         }
@@ -320,7 +321,7 @@ public class DynmapExpCommands {
             f = new File(core.getExportFolder(), finalBasename + ".zip");
         }
         sender.sendMessage("Exporting to " + f.getPath());
-        
+
         OBJExport exp = new OBJExport(f, s, w, core, finalBasename);
         exp.setRenderBounds(ctx.xmin, ctx.ymin, ctx.zmin, ctx.xmax, ctx.ymax, ctx.zmax);
         exp.setGroupEnabled(OBJExport.GROUP_CHUNK, ctx.groupByChunk);
@@ -328,15 +329,15 @@ public class DynmapExpCommands {
         exp.setGroupEnabled(OBJExport.GROUP_BLOCKID, ctx.groupByBlockID);
         exp.setGroupEnabled(OBJExport.GROUP_BLOCKIDMETA, ctx.groupByBlockIDData);
         MapManager.mapman.startOBJExport(exp, sender);
-        
+
         return true;
     }
-    
+
     private boolean handleResetExport(DynmapCommandSender sender, String[] args, ExportContext ctx, DynmapCore core) {
         sessions.remove(getContextID(sender));
         return true;
     }
-    
+
     private boolean handlePurgeExport(DynmapCommandSender sender, String[] args, ExportContext ctx, DynmapCore core) {
         if (args.length > 1) {
             String basename = args[1];
@@ -353,7 +354,7 @@ public class DynmapExpCommands {
         }
         return true;
     }
-    
+
     private String val(int v) {
         if (v == Integer.MIN_VALUE)
             return "N/A";

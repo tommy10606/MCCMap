@@ -1,3 +1,4 @@
+// Modified for MCCMap: independent Paper fork (2026).
 package org.dynmap.hdmap;
 
 import java.util.ArrayList;
@@ -1126,8 +1127,8 @@ public class IsoHDPerspective implements HDPerspective {
                 for(int k = 0; k < 2; k++) {
                     corner.z = blocks[k].z;
                     world_to_map.transform(corner, tcorner);  /* Get map coordinate of corner */
-                    int tx = fastFloor(tcorner.x/(tileSize << tilescale));
-                    int ty = fastFloor(tcorner.y/(tileSize << tilescale));
+                    int tx = fastFloor(tcorner.x/tileSize);
+                    int ty = fastFloor(tcorner.y/tileSize);
                     if(mintilex > tx) mintilex = tx;
                     if(maxtilex < tx) maxtilex = tx;
                     if(mintiley > ty) mintiley = ty;
@@ -1250,6 +1251,7 @@ public class IsoHDPerspective implements HDPerspective {
     @Override
     public boolean render(MapChunkCache cache, HDMapTile tile, String mapname) {
         final long startTimestamp = System.currentTimeMillis();
+        boolean validRender = true;
         Color rslt = new Color();
         MapIterator mapiter = cache.getIterator(0, 0, 0);
         DynmapWorld world = tile.getDynmapWorld();
@@ -1364,6 +1366,7 @@ public class IsoHDPerspective implements HDPerspective {
                 try {
                     ps.raytrace(cache, shaderstate, shaderdone);
                 } catch (Exception ex) {
+                    validRender = false;
                     Log.severe("Error while raytracing tile: perspective=" + this.name + ", coord=" + mapiter.getX() + "," + mapiter.getY() + "," + mapiter.getZ() + ", blockid=" + mapiter.getBlockType() + ", lighting=" + mapiter.getBlockSkyLight() + ":" + mapiter.getBlockEmittedLight() + ", biome=" + mapiter.getBiome().toString(), ex);
                 }
                 final int rowOffset = (tilePixelSize - y - 1) * tilePixelSize + x;
@@ -1403,7 +1406,8 @@ public class IsoHDPerspective implements HDPerspective {
                 if(mtile.matchesHashCode(crc) == false) {
                     /* Wrap buffer as buffered image */
                     if(rendered[i]) {   
-                        mtile.write(crc, im[i].buf_img, startTimestamp);
+                        if (!mtile.write(crc, im[i].buf_img, startTimestamp)) validRender = false;
+                        else if (validRender) MapManager.mapman.recordSuccessfulTileRender(mtile, startTimestamp);
                     }
                     else {
                         mtile.delete();
@@ -1413,8 +1417,10 @@ public class IsoHDPerspective implements HDPerspective {
                     renderone = true;
                 }
                 else {
-                    if(!rendered[i]) {   
+                    if(!rendered[i]) {
                         mtile.delete();
+                    } else if (validRender) {
+                        MapManager.mapman.recordSuccessfulTileRender(mtile, startTimestamp);
                     }
                 }
             } finally {
@@ -1434,7 +1440,8 @@ public class IsoHDPerspective implements HDPerspective {
                     if(mtile.matchesHashCode(crc) == false) {
                         /* Wrap buffer as buffered image */
                         if(rendered[i]) {
-                            mtile.write(crc, dayim[i].buf_img, startTimestamp);
+                            if (!mtile.write(crc, dayim[i].buf_img, startTimestamp)) validRender = false;
+                            else if (validRender) MapManager.mapman.recordSuccessfulTileRender(mtile, startTimestamp);
                         }
                         else {
                             mtile.delete();
@@ -1444,8 +1451,10 @@ public class IsoHDPerspective implements HDPerspective {
                         renderone = true;
                     }
                     else {
-                        if(!rendered[i]) {   
+                        if(!rendered[i]) {
                             mtile.delete();
+                        } else if (validRender) {
+                            MapManager.mapman.recordSuccessfulTileRender(mtile, startTimestamp);
                         }
                     }
                 } finally {
@@ -1455,6 +1464,7 @@ public class IsoHDPerspective implements HDPerspective {
                 MapManager.mapman.updateStatistics(tile, prefix+"_day", true, tile_update, !rendered[i]);
             }
         }
+        if (validRender) MapManager.mapman.recordTileRefreshComplete(tile);
         return renderone;
     }
 

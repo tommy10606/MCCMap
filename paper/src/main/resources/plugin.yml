@@ -1,0 +1,375 @@
+# Modified for MCCMap: Paper-only support and a read-only website (2026).
+name: MCCMap
+main: org.dynmap.bukkit.MCCMapPlugin
+version: "${version}-Dynmap-fork"
+description: 'MCCMap, a Paper-only fork of Dynmap 3.9-SNAPSHOT (93b454e)'
+website: 'https://github.com/tommy10606/MCCMap'
+authors: [Tommy10606, mikeprimm]
+contributors: [Dynmap contributors]
+api-version: '26.3'
+
+
+softdepend: [ LuckPerms, SkinsRestorer, WorldEdit, WorldGuard, WorldBorder, Essentials, VentureChat ]
+commands:
+  mccmap:
+    description: Controls MCCMap.
+    usage: |
+           /<command> hide - hides the player from the map.
+           /<command> hide TheDude - hides the player 'TheDude' on the map.
+           /<command> show - shows the player on the map.
+           /<command> show TheDude - shows the player 'TheDude' on the map.
+           /<command> render - Renders the tile at your location.
+           /<command> fullrender - Render all maps for entire world from your location.
+           /<command> fullrender world - Render all maps for entire world 'world'.
+           /<command> fullrender world:mapname - Render map 'mapname' of world 'world'.
+           /<command> radiusrender ## - Render at least ## block radius from your location on all maps.
+           /<command> radiusrender ## mapname - Render at least ## block radius from your location on map 'mapname'
+           /<command> radiusrender worldname x z ## - Render at least ## block radius from location x,z on world 'worldname'
+           /<command> radiusrender worldname x z ## mapname - Render at least ## block radius from location x,z on world 'worldname' on map 'mapname'
+           /<command> updaterender - Render updates starting at your location on all maps.
+           /<command> updaterender mapname - Render updates starting at your location on give map
+           /<command> updaterender worldname x z mapname - Render updates starting at location x,z on world 'worldname' for given map
+           /<command> cancelrender - Cancels any active renders on current world
+           /<command> cancelrender world - Cancels any active renders of world 'world'
+           /<command> stats - Show storage usage, render statistics, and stale-refresh progress.
+           /<command> tpscheck off|on|status - Bypass TPS checks for 24 hours, restore them, or show status.
+           /<command> triggerstats - Show render trigger statistics
+           /<command> resetstats - Reset render statistics.
+           /<command> purgequeue - Set tile update queue to empty
+           /<command> purgequeue worldname - Set tile update queue to empty for world 'worldname'
+           /<command> purgemap worldname mapname - Delete all the tiles for map 'mapname' of world 'worldname'
+           /<command> purgeworld worldname - Delete all the files for world 'worldname'
+           /<command> pause - Show render pause state
+           /<command> pause <all|none|full|update> - Set render pause state
+           /<command> quiet - Stop progress messages from active jobs
+           /<command> url - Returns public URL for MCCMap, if published
+
+  mccmarker:
+    description: Manipulate map markers
+    usage: |
+           /<command> add <label> - add new marker with given label at current location (use double-quotes if spaces needed)
+           /<command> add id:<id> <label> - add new marker with given ID at current location (use double-quotes if spaces needed)
+           /<command> movehere <label> - move marker with given label to current location
+           /<command> movehere id:<id> - move marker with given ID to current location
+           /<command> update <label> icon:<icon> newlabel:<newlabel>- update marker with given ID with new label and/or icon
+           /<command> delete <label> - delete marker with given label
+           /<command> delete id:<id> - delete marker with given ID
+           /<command> list - list details of all markers
+           /<command> icons - list details of all icons
+           /<command> addset <label> - add marker set with given label (ID=label)
+           /<command> addset id:<id> <label> - add marker set with given ID and label
+           /<command> updateset id:<id> newlabel:<label> - update marker set with given ID
+           /<command> updateset <label> newlabel:<label> - update marker set with given label
+           /<command> deleteset <label> - delete marker set with given label
+           /<command> deleteset id:<id> - delete marker set with given ID
+           /<command> listsets - list all marker sets
+           /<command> addicon id:<id> <label> file:"filename" - install new icon
+           /<command> updateicon id:<id> newlabel:<label> file:"filename" - update existing icon
+           /<command> updateicon <label> newlabel:<label> file:"filename" - update existing icon
+           /<command> deleteicon id:<id> - remove icon
+           /<command> deleteicon <label> - remove icon
+           /<command> addcorner - add corner to corner list using current location
+           /<command> addcorner <x> <y> <z> <world> - add corner with given x, y and z coordinate on given world to corner list
+           /<command> clearcorners - clear corner list
+           /<command> addarea <label> - add new area with given label using corner list
+           /<command> addarea id:<id> <label> - add new area with given ID using corner list
+           /<command> deletearea <label> - delete area with given label
+           /<command> deletearea id:<id> <label> - delete area with given ID
+           /<command> listareas - list details of all areas
+           /<command> updatearea <label> <arg>:<value> ... - update attributes of area with given label
+           /<command> updatearea id:<id> <arg>:<value> ... - update attributes of area with given ID
+           /<command> addline <label> - add new poly-line with given label using corner list
+           /<command> addline id:<id> <label> - add new poly-line with given ID using corner list
+           /<command> deleteline <label> - delete poly-line with given label
+           /<command> deleteline id:<id> <label> - delete poly-line with given ID
+           /<command> listlines - list details of all poly-lines
+           /<command> updateline <label> <arg>:<value> ... - update attributes of poly-line with given label
+           /<command> updateline id:<id> <arg>:<value> ... - update attributes of poly-line with given ID
+           /<command> addcircle <label> radius:<rad> - add new circle centered at current location with given radius and label
+           /<command> addcircle id:<id> <label> radius:<rad> - add new circle centered at current location with given radius and ID
+           /<command> addcircle <label> radius:<rad> x:<x> y:<y> z:<z> world:<world> - add new circle centered at given coordinates with given radius and label
+           /<command> deletecircle <label> - delete circle with given label
+           /<command> deletecircle id:<id> <label> - delete circle with given ID
+           /<command> listcircles - list details of all circles
+           /<command> updatecircle <label> <arg>:<value> ... - update attributes of circle with given label
+           /<command> updatecircle id:<id> <arg>:<value> ... - update attributes of circle with given ID
+           /<command> getdesc id:<id> type:<icon|area|circle|line> - get description for marker with given ID
+           /<command> getdesc <label> type:<icon|area|circle|line> - get description for marker with given label
+           /<command> resetdesc id:<id> type:<icon|area|circle|line> - clear description for marker with given ID
+           /<command> resetdesc <label> type:<icon|area|circle|line> - clear description for marker with given label
+           /<command> appenddesc id:<id> type:<icon|area|circle|line> desc:"text" - append text line to description for marker with given ID
+           /<command> appenddesc <label> type:<icon|area|circle|line> desc:"text" - append text line to description for marker with given label
+           /<command> importdesc id:<id> type:<icon|area|circle|line> file:<filename> - import description from given file for marker with given ID
+           /<command> importdesc <label> type:<icon|area|circle|line> file:<filename> - import description from given file for marker with given label
+           /<command> importlabel id:<id> type:<icon|area|circle|line> file:<filename> - import label with markup from given file for marker with given ID
+           /<command> importlabel <label> type:<icon|area|circle|line> file:<filename> - import label with markup from given file for marker with given label
+           /<command> getlabel id:<id> type:<icon|area|circle|line> - get label for marker with given ID
+
+  mccmapconfig:
+    description: List and modify MCCMap configuration
+    usage: |
+           /<command> worldlist - list all worlds configured (enabled or disabled)
+           /<command> worldset worldname enabled:<true|false> - enable or disable a world
+           /<command> worldset worldname center:<x/y/z|here|default> - set map center for given world
+           /<command> worldset worldname extrazoomout:<N> - set extra zoom out levels for given world
+           /<command> maplist worldname - list all maps for given world
+           /<command> mapdelete worldname:mapname - delete given map of given world
+           /<command> mapadd worldname:mapname attrib:value attrib:value - create map on given world with given attributes
+           /<command> mapset worldname:mapname attrib:value attrib:value - update given map on given world with given attributes
+           /<command> worldreset worldname - reset given world to default template for world type
+           /<command> worldreset worldname templatename - reset given world to given template
+           /<command> worldgetlimits worldname - list visibility and hidden limits for world
+           /<command> worldaddlimit worldname type:rect corner1:<x>/<z> corner2:<x|z> - Add rectangular visibility limit
+           /<command> worldaddlimit worldname type:round center:<x>/<z> radius:<radius> - Add circular visibility limit
+           /<command> worldaddlimit worldname limittype:hidden type:rect corner1:<x>/<z> corner2:<x|z> - Add rectangular hidden limit
+           /<command> worldaddlimit worldname limittype:hidden type:round center:<x>/<z> radius:<radius> - Add circular hidden limit
+           /<command> worldremovelimit worldname <limit-index> - Remove limit with index <limit-index>
+  mccmapexport:
+    description: Map export commands
+    usage: |
+           /<command> shader <shadername> - Export material library for shader <shadername>
+
+permissions:
+  mccmap.*:
+    description: Gives access to all MCCMap functions
+    children:
+      mccmap.render: true
+      mccmap.show.self: true
+      mccmap.show.others: true
+      mccmap.hide.self: true
+      mccmap.hide.others: true
+      mccmap.fullrender: true
+      mccmap.radiusrender: true
+      mccmap.updaterender: true
+      mccmap.cancelrender: true
+      mccmap.reload: true
+      mccmap.stats: true
+      mccmap.tpscheck: true
+      mccmap.resetstats: true
+      mccmap.purgequeue: true
+      mccmap.purgemap: true
+      mccmap.purgeworld: true
+      mccmap.quiet: true
+      mccmap.dumpmemory: true
+      mccmap.url: true
+      mccmap.pause: true
+      mccmap.marker.add: true
+      mccmap.marker.update: true
+      mccmap.marker.movehere: true
+      mccmap.marker.delete: true
+      mccmap.marker.list: true
+      mccmap.marker.icons: true
+      mccmap.marker.sign: true
+      mccmap.marker.addset: true
+      mccmap.marker.updateset: true
+      mccmap.marker.deleteset: true
+      mccmap.marker.listsets: true
+      mccmap.marker.addicon: true
+      mccmap.marker.updateicon: true
+      mccmap.marker.deleteicon: true
+      mccmap.marker.addarea: true
+      mccmap.marker.updatearea: true
+      mccmap.marker.listareas: true
+      mccmap.marker.deletearea: true
+      mccmap.marker.addcircle: true
+      mccmap.marker.updatecircle: true
+      mccmap.marker.listcircles: true
+      mccmap.marker.deletecircle: true
+      mccmap.marker.getdesc: true
+      mccmap.marker.resetdesc: true
+      mccmap.marker.appenddesc: true
+      mccmap.marker.importdesc: true
+      mccmap.marker.getlabel: true
+      mccmap.marker.importlabel: true
+      mccmap.mccmapconfig.worldlist: true
+      mccmap.mccmapconfig.worldset: true
+      mccmap.mccmapconfig.worldreset: true
+      mccmap.mccmapconfig.mapdelete: true
+      mccmap.mccmapconfig.mapset: true
+      mccmap.mccmapconfig.mapadd: true
+      mccmap.mccmapconfig.perspectivelist: true
+      mccmap.mccmapconfig.shaderlist: true
+      mccmap.mccmapconfig.lightinglist: true
+  mccmap.render:
+    description: Allows /mccmap render command
+    default: true
+  mccmap.show.self:
+    description: Allows /mccmap show (on self)
+    default: true
+  mccmap.show.others:
+    description: Allows /mccmap show <player>
+    default: op
+  mccmap.hide.self:
+    description: Allows /mccmap hide (on self)
+    default: true
+  mccmap.hide.others:
+    description: Allows /mccmap hide <player>
+    default: op
+  mccmap.fullrender:
+    description: Allows /mccmap fullrender or /mccmap fullrender <world>
+    default: op
+  mccmap.radiusrender:
+    description: Allows /mccmap radiusrender
+    default: op
+  mccmap.updaterender:
+    description: Allows /mccmap updaterender
+    default: op
+  mccmap.cancelrender:
+    description: Allows /mccmap cancelrender <world>
+    default: op
+  mccmap.reload:
+    description: Allows /mccmap reload
+    default: op
+  mccmap.stats:
+    description: Allows storage/render/refresh diagnostics and trigger statistics
+    default: op
+  mccmap.tpscheck:
+    description: Allows a 24-hour TPS-check bypass and its cancellation.
+    default: op
+  mccmap.resetstats:
+    description: Allows /mccmap resetstats or /mccmap resetstats <world>
+    default: op
+  mccmap.purgequeue:
+    description: Allows /mccmap purgequeue
+    default: op
+  mccmap.purgemap:
+    description: Allows /mccmap purgemap
+    default: op
+  mccmap.purgeworld:
+    description: Allows /mccmap purgeworld
+    default: op
+  mccmap.pause:
+    description: Allows /mccmap pause
+    default: op
+  mccmap.quiet:
+    description: Allows /mccmap quiet
+    default: true
+  mccmap.dumpmemory:
+    description: Allows /mccmap dumpmemory
+    default: op
+  mccmap.url:
+    description: Allows /mccmap url
+    default: true
+  mccmap.marker.add:
+    description: Allows /mccmarker add
+    default: op
+  mccmap.marker.update:
+    description: Allows /mccmarker update
+    default: op
+  mccmap.marker.movehere:
+    description: Allows /mccmarker movehere
+    default: op
+  mccmap.marker.delete:
+    description: Allows /mccmarker delete
+    default: op
+  mccmap.marker.list:
+    description: Allows /mccmarker list
+    default: true
+  mccmap.marker.icons:
+    description: Allows /mccmarker icons
+    default: true
+  mccmap.marker.sign:
+    description: Allows creation of markers using signs
+    default: op
+  mccmap.marker.addset:
+    description: Allows /mccmarker addset
+    default: op
+  mccmap.marker.updateset:
+    description: Allows /mccmarker updateset
+    default: op
+  mccmap.marker.deleteset:
+    description: Allows /mccmarker deleteset
+    default: op
+  mccmap.marker.listsets:
+    description: Allows /mccmarker listsets
+    default: true
+  mccmap.marker.addicon:
+    description: Allows /mccmarker addicon
+    default: op
+  mccmap.marker.updateicon:
+    description: Allows /mccmarker updateicon
+    default: op
+  mccmap.marker.deleteicon:
+    description: Allows /mccmarker deleteicon
+    default: op
+  mccmap.marker.addarea:
+    description: Allows /mccmarker addarea, /mccmarker addcorner, /mccmarker clearcorners
+    default: op
+  mccmap.marker.updatearea:
+    description: Allows /mccmarker updatearea
+    default: op
+  mccmap.marker.listareas:
+    description: Allows /mccmarker listareas
+    default: op
+  mccmap.marker.deletearea:
+    description: Allows /mccmarker deletearea
+    default: op
+  mccmap.marker.addline:
+    description: Allows /mccmarker addline
+    default: op
+  mccmap.marker.updateline:
+    description: Allows /mccmarker updateline
+    default: op
+  mccmap.marker.listlines:
+    description: Allows /mccmarker listlines
+    default: op
+  mccmap.marker.deleteline:
+    description: Allows /mccmarker deleteline
+    default: op
+  mccmap.marker.addcircle:
+    description: Allows /mccmarker addcircle
+    default: op
+  mccmap.marker.updatecircle:
+    description: Allows /mccmarker updatecircle
+    default: op
+  mccmap.marker.listcircles:
+    description: Allows /mccmarker listcircles
+    default: op
+  mccmap.marker.deletecircle:
+    description: Allows /mccmarker deletecircle
+    default: op
+  mccmap.marker.getdesc:
+    description: Allows /mccmarker getdesc
+    default: op
+  mccmap.marker.resetdesc:
+    description: Allows /mccmarker resetdesc
+    default: op
+  mccmap.marker.appenddesc:
+    description: Allows /mccmarker appenddesc
+    default: op
+  mccmap.marker.importdesc:
+    description: Allows /mccmarker importdesc
+    default: op
+  mccmap.marker.getlabel:
+    description: Allows /mccmarker getlabel
+    default: op
+  mccmap.marker.importlabel:
+    description: Allows /mccmarker importlabel
+    default: op
+  mccmap.mccmapconfig.worldlist:
+    description: Allows /mccmapconfig worldlist
+    default: op
+  mccmap.mccmapconfig.worldset:
+    description: Allows /mccmapconfig worldset
+    default: op
+  mccmap.mccmapconfig.worldreset:
+    description: Allows /mccmapconfig worldreset
+    default: op
+  mccmap.mccmapconfig.mapdelete:
+    description: Allows /mccmapconfig mapdelete
+    default: op
+  mccmap.mccmapconfig.mapset:
+    description: Allows /mccmapconfig mapset
+    default: op
+  mccmap.mccmapconfig.mapadd:
+    description: Allows /mccmapconfig mapadd
+    default: op
+  mccmap.mccmapconfig.perspectivelist:
+    description: Allows /mccmapconfig perspectivelist
+    default: op
+  mccmap.mccmapconfig.shaderlist:
+    description: Allows /mccmapconfig shaderlist
+    default: op
+  mccmap.mccmapconfig.lightinglist:
+    description: Allows /mccmapconfig lightinglist
+    default: op

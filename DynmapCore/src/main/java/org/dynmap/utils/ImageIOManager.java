@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.utils;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -20,7 +21,7 @@ import org.dynmap.MapType.ImageEncoding;
 import org.dynmap.MapType.ImageFormat;
 import org.dynmap.storage.MapStorageTile;
 
-import com.google.common.io.Files;
+import java.nio.file.Files;
 
 import org.dynmap.DynmapCore;
 
@@ -32,26 +33,26 @@ public class ImageIOManager {
     public static String postUpdateCommand = null;
     private static Object imageioLock = new Object();
     public static DynmapCore core;	// Injected during enableCore
-    
+
     private static boolean did_warning = false;
-    
+
     private static ImageFormat validateFormat(ImageFormat fmt) {
-    	// If WEBP, see if supported
-    	if (fmt.getEncoding() == ImageEncoding.WEBP) {
-    		if (core.getCWEBPPath() == null) {	// No encoder?
-    			if (!did_warning) {
-    				Log.warning("Attempt to use WEBP support when not usable: using JPEG");
-    				did_warning = true;
-    			}
-				fmt = ImageFormat.FORMAT_JPG;	// Switch to JPEN
-    		}
-    	}
-    	return fmt;
+        // If WEBP, see if supported
+        if (fmt.getEncoding() == ImageEncoding.WEBP) {
+            if (core.getCWEBPPath() == null) {	// No encoder?
+                if (!did_warning) {
+                    Log.warning("Attempt to use WEBP support when not usable: using JPEG");
+                    did_warning = true;
+                }
+                fmt = ImageFormat.FORMAT_JPG;	// Switch to JPEN
+            }
+        }
+        return fmt;
     }
-    
+
     private static void doWEBPEncode(BufferedImage img, ImageFormat fmt, OutputStream out) throws IOException {
         BufferOutputStream bos = new BufferOutputStream();
-        
+
         ImageIO.write(img, "png", bos); // Encode as PNG in buffere output stream
         // Write to a tmp file
         File tmpfile = File.createTempFile("pngToWebp", "png");
@@ -63,7 +64,7 @@ public class ImageIOManager {
         ArrayList<String> args = new ArrayList<String>();
         args.add(core.getCWEBPPath());
         if (fmt.getID().endsWith("-l")) {
-        	args.add("-lossless");
+            args.add("-lossless");
         }
         args.add("-q");
         args.add(Integer.toString((int)fmt.getQuality()));
@@ -72,12 +73,12 @@ public class ImageIOManager {
         args.add(tmpfile2.getAbsolutePath());
         Process pr = Runtime.getRuntime().exec(args.toArray(new String[0]));
         try {
-        	pr.waitFor();
+            pr.waitFor();
         } catch (InterruptedException ix) {
-        	throw new IOException("Error waiting for encoder");
+            throw new IOException("Error waiting for encoder");
         }
         // Read output file into output stream
-        Files.copy(tmpfile2, out);
+        Files.copy(tmpfile2.toPath(), out);
         out.flush();
         // Clean up temp files
         tmpfile.delete();
@@ -87,22 +88,22 @@ public class ImageIOManager {
     private static BufferedImage doWEBPDecode(BufferInputStream buf) throws IOException {
         // Write to a tmp file
         File tmpfile = File.createTempFile("webpToPng", "webp");
-        Files.write(buf.buffer(), tmpfile);
+        Files.write(tmpfile.toPath(), buf.buffer());
         // Run encoder to new new temp file
         File tmpfile2 = File.createTempFile("webpToPng", "png");
         String args[] = { core.getDWEBPPath(), tmpfile.getAbsolutePath(), "-o", tmpfile2.getAbsolutePath() };
         Process pr = Runtime.getRuntime().exec(args);
         try {
-        	pr.waitFor();
+            pr.waitFor();
         } catch (InterruptedException ix) {
-        	throw new IOException("Error waiting for encoder");
+            throw new IOException("Error waiting for encoder");
         }
         // Read file
         BufferedImage obuf = ImageIO.read(tmpfile2);
         // Clean up temp files
         tmpfile.delete();
         tmpfile2.delete();
-        
+
         return obuf;
     }
 
@@ -155,7 +156,7 @@ public class ImageIOManager {
                 rgbBuffer.flush();
             }
             else if (fmt.getEncoding() == ImageEncoding.WEBP) {
-            	doWEBPEncode(img, fmt, bos);
+                doWEBPEncode(img, fmt, bos);
             }
             else {
                 ImageIO.write(img, fmt.getFileExt(), bos); /* Write to byte array stream - prevent bogus I/O errors */

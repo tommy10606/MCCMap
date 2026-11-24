@@ -1,3 +1,4 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.debug;
 
 import org.dynmap.ConfigurationNode;

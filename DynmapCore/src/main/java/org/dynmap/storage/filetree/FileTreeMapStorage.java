@@ -1,9 +1,8 @@
+// Modified for MCCMap: Paper-only support and a read-only website (2026).
 package org.dynmap.storage.filetree;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,10 +16,10 @@ import org.dynmap.MapType;
 import org.dynmap.MapType.ImageEncoding;
 import org.dynmap.MapType.ImageVariant;
 import org.dynmap.PlayerFaces.FaceType;
-import org.dynmap.WebAuthManager;
 import org.dynmap.debug.Debug;
 import org.dynmap.storage.MapStorage;
 import org.dynmap.storage.MapStorageTile;
+import org.dynmap.utils.ImageIOManager;
 import org.dynmap.storage.MapStorageTileEnumCB;
 import org.dynmap.storage.MapStorageBaseTileEnumCB;
 import org.dynmap.storage.MapStorageTileSearchEndCB;
@@ -29,16 +28,46 @@ import org.dynmap.utils.BufferOutputStream;
 
 public class FileTreeMapStorage extends MapStorage {
     private File baseTileDir;
+    private DynmapCore core;
     private TileHashManager hashmap;
     private static final int MAX_WRITE_RETRIES = 6;
     private static final Charset UTF8 = Charset.forName("UTF-8");
+
+    // Configured storage roots may themselves be links; never follow links below that boundary.
+    private boolean safePath(File file) {
+        var root = baseTileDir.toPath().toAbsolutePath().normalize();
+        var path = file.toPath().toAbsolutePath().normalize();
+        if (!path.startsWith(root)) return false;
+        for (var part = path; !part.equals(root); part = part.getParent())
+            if (java.nio.file.Files.isSymbolicLink(part)) return false;
+        return true;
+    }
+    private static boolean safeId(String id, boolean nested) {
+        if (id == null || id.isEmpty() || id.length() > 512 || id.indexOf('\\') >= 0 || id.startsWith("/")) return false;
+        for (int i = 0; i < id.length(); i++) if (Character.isISOControl(id.charAt(i))) return false;
+        String[] parts = id.split("/", -1);
+        if (!nested && parts.length != 1) return false;
+        for (String part : parts) if (part.isEmpty() || part.equals(".") || part.equals("..") || part.indexOf(':') >= 0) return false;
+        return true;
+    }
+    private byte[] readFile(File file, int limit) {
+        if (!safePath(file) || !java.nio.file.Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return null;
+        try (var channel = java.nio.file.Files.newByteChannel(file.toPath(), java.util.Set.of(
+                java.nio.file.StandardOpenOption.READ, java.nio.file.LinkOption.NOFOLLOW_LINKS))) {
+            if (!java.nio.file.Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) || channel.size() > limit) return null;
+            try (var input = java.nio.channels.Channels.newInputStream(channel)) {
+                byte[] bytes = input.readNBytes(limit + 1);
+                return bytes.length > limit ? null : bytes;
+            }
+        } catch (IOException | RuntimeException failure) { return null; }
+    }
 
     public class StorageTile extends MapStorageTile {
         private final String baseFilename;
         private final String uri;
         private File f; // cached file
         private ImageEncoding f_fmt;
-        
+
         StorageTile(DynmapWorld world, MapType map, int x, int y,
                 int zoom, ImageVariant var) {
             super(world, map, x, y, zoom, var);
@@ -60,18 +89,9 @@ public class FileTreeMapStorage extends MapStorage {
             return f;
         }
         private File getTileFile() {
-            ImageEncoding fmt = map.getImageFormat().getEncoding();
-            File ff = getTileFile(fmt);
-            if (ff.exists() == false) {
-                if (fmt == ImageEncoding.PNG) {
-                    fmt = ImageEncoding.JPG;
-                }
-                else {
-                    fmt = ImageEncoding.PNG;
-                }
-                ff = getTileFile(fmt);
-            }
-            return ff;
+            // A previous format can belong to a different projection/resolution.
+            // Never present those pixels under the current map's coordinates.
+            return getTileFile(map.getImageFormat().getEncoding());
         }
         private List<File> getTileFilesAltFormats() {
             ImageEncoding fmt = map.getImageFormat().getEncoding();
@@ -88,44 +108,27 @@ public class FileTreeMapStorage extends MapStorage {
         @Override
         public boolean exists() {
             File ff = getTileFile();
-            return ff.isFile() && ff.canRead();
+            return safePath(ff) && ff.isFile() && ff.canRead();
+        }
+
+        @Override
+        public long getLastModified() {
+            File ff = getTileFile(); return safePath(ff) ? ff.lastModified() : 0;
         }
 
         @Override
         public boolean matchesHashCode(long hash) {
             File ff = getTileFile(map.getImageFormat().getEncoding());
-            return ff.isFile() && ff.canRead() && (hash == hashmap.getImageHashCode(world.getName() + "." + map.getPrefix(), x, y));
+            return safePath(ff) && ff.isFile() && ff.canRead() && (hash == hashmap.getImageHashCode(world.getName() + "." + map.getPrefix(), x, y));
         }
 
         @Override
         public TileRead read() {
             ImageEncoding fmt = map.getImageFormat().getEncoding();
             File ff = getTileFile(fmt);
-            if (ff.exists() == false) { // Fallback and try to read other format
-                if (fmt == ImageEncoding.PNG) {
-                    fmt = ImageEncoding.JPG;
-                }
-                else {
-                    fmt = ImageEncoding.PNG;
-                }
-                ff = getTileFile(fmt);
-            }
-            if (ff.isFile()) {
+            byte[] buf = readFile(ff, 32 * 1024 * 1024);
+            if (buf != null) {
                 TileRead tr = new TileRead();
-                byte[] buf = new byte[(int) ff.length()];
-                FileInputStream fis = null;
-                try {
-                    fis = new FileInputStream(ff);
-                    fis.read(buf, 0, buf.length);   // Read whole thing
-                } catch (IOException iox) {
-                    Log.info("read (" + ff.getPath() + ") failed = " + iox.getMessage());
-                    return null;
-                } finally {
-                    if (fis != null) {
-                        try { fis.close(); } catch (IOException iox) {}
-                        fis = null;
-                    }
-                }
                 tr.image = new BufferInputStream(buf);
                 tr.format = fmt;
                 tr.hashCode = hashmap.getImageHashCode(world.getName() + "." + map.getPrefix(), x, y);
@@ -136,17 +139,91 @@ public class FileTreeMapStorage extends MapStorage {
         }
 
         @Override
+        public TileRead readForDisplay() {
+            TileRead nativeTile = read();
+            return nativeTile == null ? readLegacyPreview() : zoom > 0 ? mergeLegacyOverview(nativeTile) : nativeTile;
+        }
+
+        private TileRead readLegacyPreview() {
+            if(zoom<0||zoom>30)return null;
+            long[] modified={0};
+            java.awt.image.BufferedImage image = null;
+            try {
+                // Each format can come from a different render generation and grid.
+                // Draw older JPEG coverage first, then the high-detail PNG coverage.
+                for (var sourceLayout : map.getTilePreviewSources()) {
+                    String legacy=sourceLayout.prefix();int shift=sourceLayout.scaleShift();ImageEncoding encoding=sourceLayout.encoding();
+                    if(legacy.equals(map.getPrefix()) || shift < -4 || shift > 4)continue;
+                    String extension = encoding == ImageEncoding.PNG ? "png" : "jpg";
+                    var layer=LegacyTilePreview.render(x,y,zoom,shift,source->{
+                        String zoomPrefix=source.zoom()==0?"":"z".repeat(source.zoom())+"_";
+                        File old=new File(baseTileDir,world.getName()+"/"+legacy+var.variantSuffix+"/"+(source.x()>>5)+"_"+(source.y()>>5)+"/"+zoomPrefix+source.x()+"_"+source.y()+"."+extension);
+                        byte[] data=readFile(old,32*1024*1024);
+                        if(data!=null)modified[0]=Math.max(modified[0],old.lastModified());
+                        return data;
+                    });
+                    if(layer==null)continue;
+                    if(image==null)image=layer;
+                    else {
+                        var graphics=image.createGraphics();
+                        try {graphics.drawImage(layer,0,0,null);}
+                        finally {graphics.dispose();layer.flush();}
+                    }
+                }
+                if(image==null)return null;
+                var encoded=ImageIOManager.imageIOEncode(image,MapType.ImageFormat.FORMAT_PNG);
+                if(encoded==null)return null;
+                var result=new TileRead();result.image=new BufferInputStream(encoded.buf,encoded.len);result.format=ImageEncoding.PNG;
+                var checksum=new java.util.zip.CRC32();checksum.update(encoded.buf,0,encoded.len);result.hashCode=checksum.getValue();
+                result.lastModified=modified[0];return result;
+            }catch(IOException|RuntimeException invalid){return null;}
+            finally {if(image!=null)image.flush();}
+        }
+
+        /** A partially generated overview is not proof that its whole area was rendered. */
+        private TileRead mergeLegacyOverview(TileRead current) {
+            if (current.format != ImageEncoding.PNG) return current;
+            boolean available=false;
+            for(var source:map.getTilePreviewSources()) {
+                File root=new File(baseTileDir,world.getName()+"/"+source.prefix()+var.variantSuffix);
+                if(!source.prefix().equals(map.getPrefix()) && safePath(root) && root.isDirectory()) {available=true;break;}
+            }
+            if(!available)return current;
+            java.awt.image.BufferedImage foreground = null, background = null;
+            try {
+                var copy = new TileRead(); copy.format = current.format;
+                copy.image = new BufferInputStream(current.image.buffer(), current.image.length());
+                foreground = ImageIOManager.imageIODecode(copy);
+                if (foreground == null || foreground.getWidth() != 128 || foreground.getHeight() != 128) return current;
+                boolean transparent = false;
+                for (int y=0; y<128 && !transparent; y++) for (int x=0; x<128; x++)
+                    if ((foreground.getRGB(x,y) >>> 24) < 255) { transparent = true; break; }
+                if (!transparent) return current;
+                TileRead legacy = readLegacyPreview();
+                if (legacy == null) return current;
+                background = ImageIOManager.imageIODecode(legacy);
+                if (background == null) return current;
+                var graphics = background.createGraphics();
+                try { graphics.drawImage(foreground, 0, 0, null); }
+                finally { graphics.dispose(); }
+                var encoded = ImageIOManager.imageIOEncode(background, MapType.ImageFormat.FORMAT_PNG);
+                if (encoded == null) return current;
+                var result = new TileRead(); result.image = new BufferInputStream(encoded.buf, encoded.len);
+                result.format = ImageEncoding.PNG; result.lastModified = Math.max(current.lastModified, legacy.lastModified);
+                var checksum = new java.util.zip.CRC32(); checksum.update(encoded.buf, 0, encoded.len); result.hashCode = checksum.getValue();
+                return result;
+            } catch (IOException | RuntimeException invalid) { return current; }
+            finally { if(foreground != null) foreground.flush(); if(background != null) background.flush(); }
+        }
+
+        @Override
         public boolean write(long hash, BufferOutputStream encImage, long timestamp) {
             File ff = getTileFile(map.getImageFormat().getEncoding());
             List<File> ffalt = getTileFilesAltFormats();
             File ffpar = ff.getParentFile();
-            // Always clean up old alternate files, if they exist
-            for (File file: ffalt) {
-                if (file.exists()) {
-                    file.delete();
-                }
-            }
+            if (!safePath(ff) || ffalt.stream().anyMatch(file -> !safePath(file))) return false;
             if (encImage == null) { // Delete?
+                for (File file : ffalt) file.delete();
                 ff.delete();
                 hashmap.updateHashCode(world.getName() + "." + map.getPrefix(), x, y, -1);
                 // Signal update for zoom out
@@ -158,15 +235,47 @@ public class FileTreeMapStorage extends MapStorage {
             if (ffpar.exists() == false) {
                 ffpar.mkdirs();
             }
-            if (replaceFile(ff, encImage.buf, encImage.len, timestamp) == false) {
+            if (!replaceFile(ff, encImage.buf, encImage.len, timestamp)) {
+                if (core.getStorageUsage() != null && core.getStorageUsage().pauseReason() != null) {
+                    var state = world.getMapState(map);
+                    if (state != null) {
+                        if (zoom == 0) state.invalidateTile(x, y);
+                        else state.setZoomOutInv(x, y, zoom - 1);
+                    }
+                }
                 return false;
             }
+            for (File file : ffalt) file.delete();
             hashmap.updateHashCode(world.getName() + "." + map.getPrefix(), x, y, hash);
+            retireLegacyTiles();
             // Signal update for zoom out
             if (zoom == 0) {
                 world.enqueueZoomOutUpdate(this);
             }
             return true;
+        }
+
+        /** Retire only known compatible sources after every overlapping native replacement exists. */
+        private void retireLegacyTiles() {
+            if(zoom!=0)return;
+            for (var sourceLayout : map.getTilePreviewSources()) {
+                String legacy=sourceLayout.prefix();int shift=sourceLayout.scaleShift();ImageEncoding encoding=sourceLayout.encoding();
+                if(legacy.equals(map.getPrefix()) || shift < -4 || shift > 4)continue;
+                double factor=Math.scalb(1.0,shift);
+                String extension=encoding==ImageEncoding.PNG?"png":"jpg";
+                for(var source:LegacyTilePreview.sources(x,y,0,shift)) {
+                    File old=new File(baseTileDir,world.getName()+"/"+legacy+var.variantSuffix+"/"+(source.x()>>5)+"_"+(source.y()>>5)+"/"+source.x()+"_"+source.y()+"."+extension);
+                    if(!safePath(old)||!java.nio.file.Files.isRegularFile(old.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))continue;
+                    double left=factor*source.x(),top=factor*((long)source.y()+1);
+                    boolean complete=true;
+                    for(long tx=(long)Math.floor(left);complete&&tx<left+factor;tx++)for(long ty=(long)Math.ceil(top-1);ty+1>top-factor;ty--) {
+                        if(tx<Integer.MIN_VALUE||tx>Integer.MAX_VALUE||ty<Integer.MIN_VALUE||ty>Integer.MAX_VALUE
+                            ||!new StorageTile(world,map,(int)tx,(int)ty,0,var).exists()) {complete=false;break;}
+                    }
+                    if(complete)try {java.nio.file.Files.deleteIfExists(old.toPath());}
+                    catch(IOException failure){Log.warning("Cannot remove superseded map tile: "+old.getName());}
+                }
+            }
         }
 
         @Override
@@ -192,12 +301,12 @@ public class FileTreeMapStorage extends MapStorage {
         @Override
         public void cleanup() {
         }
-        
+
         @Override
         public String getURI() {
             return uri;
         }
-        
+
         @Override
         public void enqueueZoomOutUpdate() {
             world.enqueueZoomOutUpdate(this);
@@ -235,7 +344,32 @@ public class FileTreeMapStorage extends MapStorage {
             return baseFilename;
         }
     }
-    
+
+    /** Bounded, restartable metadata walk over one map's native tile layout. */
+    public boolean scanTiles(DynmapWorld world,MapType map,TileScanCursor cursor,int limit,java.util.function.Consumer<MapStorageTile> visitor)throws IOException {
+        var variants=map.getVariants();int visited=0;
+        while(cursor.variant<variants.length) {
+            var variant=variants[cursor.variant];
+            var root=new File(baseTileDir,world.getName()+"/"+map.getPrefix()+variant.variantSuffix);
+            if(!safePath(root))throw new IOException("Unsafe tile scan root");
+            java.nio.file.Path path=cursor.files.next(root.toPath());
+            if(path==null){synchronized(cursor){cursor.variant++;cursor.files=new org.dynmap.utils.ScanCursor();}continue;}
+            var match=java.util.regex.Pattern.compile("(?:(z{1,30})_)?(-?[0-9]+)_(-?[0-9]+)[.](png|jpg|webp)").matcher(path.getFileName().toString());
+            if(match.matches()&&match.group(4).equals(map.getImageFormat().getFileExt())) {
+                try {
+                    int x=Integer.parseInt(match.group(2)),y=Integer.parseInt(match.group(3)),zoom=match.group(1)==null?0:match.group(1).length();
+                    var tile=new StorageTile(world,map,x,y,zoom,variant);
+                    if(safePath(path.toFile())&&path.toAbsolutePath().normalize().equals(tile.getTileFile().toPath().toAbsolutePath().normalize())) {
+                        tile.lastModified=java.nio.file.Files.getLastModifiedTime(path,java.nio.file.LinkOption.NOFOLLOW_LINKS).toMillis();
+                        try{visitor.accept(tile);}finally{tile.cleanup();}
+                    }
+                }catch(NumberFormatException ignored){}catch(java.nio.file.NoSuchFileException removed){}
+            }
+            cursor.files.acknowledge();if(++visited>=Math.max(1,limit))return false;
+        }
+        return true;
+    }
+
     public FileTreeMapStorage() {
     }
 
@@ -244,17 +378,18 @@ public class FileTreeMapStorage extends MapStorage {
         if (!super.init(core)) {
             return false;
         }
+        this.core = core;
         baseTileDir = core.getTilesFolder();
         hashmap = new TileHashManager(baseTileDir, true);
         return true;
     }
-    
+
     @Override
     public MapStorageTile getTile(DynmapWorld world, MapType map, int x, int y,
             int zoom, ImageVariant var) {
         return new StorageTile(world, map, x, y, zoom, var);
     }
-    
+
     @Override
     public MapStorageTile getTile(DynmapWorld world, String uri) {
         String[] suri = uri.split("/");
@@ -276,34 +411,21 @@ public class FileTreeMapStorage extends MapStorage {
         if (mt == null) {   // Not found?
             return null;
         }
-        // Now, take the last section and parse out coordinates and zoom
-        String fname = suri[suri.length-1];
-        String[] coord = fname.split("[_\\.]");
-        if (coord.length < 3) { // 3 or 4
-            return null;
-        }
-        int zoom = 0;
-        int x, y;
+        // URI input never controls the underlying filesystem path.
+        if (suri.length > 3 || uri.indexOf('\\') >= 0) return null;
+        String fname = suri[suri.length - 1];
+        var coords = java.util.regex.Pattern.compile("(?:(z{1,32})_)?(-?[0-9]+)_(-?[0-9]+)\\.(?:png|jpg|webp)").matcher(fname);
+        if (!coords.matches()) return null;
         try {
-            if (coord[0].charAt(0) == 'z') {
-                zoom = coord[0].length();
-                x = Integer.parseInt(coord[1]);
-                y = Integer.parseInt(coord[2]);
-            }
-            else {
-                x = Integer.parseInt(coord[0]);
-                y = Integer.parseInt(coord[1]);
-            }
-            return getTile(world, mt, x, y, zoom, imgvar);
-        } catch (NumberFormatException nfx) {
-            return null;
-        }
+            int zoom = coords.group(1) == null ? 0 : coords.group(1).length();
+            return getTile(world, mt, Integer.parseInt(coords.group(2)), Integer.parseInt(coords.group(3)), zoom, imgvar);
+        } catch (NumberFormatException invalid) { return null; }
     }
 
 
     private void processEnumMapTiles(DynmapWorld world, MapType map, File base, ImageVariant var, MapStorageTileEnumCB cb, MapStorageBaseTileEnumCB cbBase, MapStorageTileSearchEndCB cbEnd) {
         File bdir = new File(base, map.getPrefix() + var.variantSuffix);
-        if (bdir.isDirectory() == false) {
+        if (java.nio.file.Files.isSymbolicLink(base.toPath()) || java.nio.file.Files.isSymbolicLink(bdir.toPath()) || bdir.isDirectory() == false) {
             if(cbEnd != null)
                 cbEnd.searchEnded();
             return;
@@ -320,6 +442,7 @@ public class FileTreeMapStorage extends MapStorage {
                 if (fn.equals(".") || fn.equals(".."))
                     continue;
                 File f = new File(dir, fn);
+                if (java.nio.file.Files.isSymbolicLink(f.toPath())) continue;
                 if (f.isDirectory()) {   /* If directory, add to list to process */
                     dirs.add(f);
                 }
@@ -353,6 +476,7 @@ public class FileTreeMapStorage extends MapStorage {
                             int y = Integer.parseInt(coord[1]);
                             // Invoke callback
                             MapStorageTile t = new StorageTile(world, map, x, y, zoom, var);
+                            t.lastModified = f.lastModified();
                             if(cb != null)
                                 cb.tileFound(t, fmt);
                             if(cbBase != null && t.zoom == 0)
@@ -409,6 +533,7 @@ public class FileTreeMapStorage extends MapStorage {
 
     private void processPurgeMapTiles(DynmapWorld world, MapType map, File base, ImageVariant var) {
         String mname = map.getPrefix() + var.variantSuffix;
+        if (!safePath(base) || !safePath(new File(base, mname))) return;
         // Clean up hash files
         String[] hlist = base.list();
         if (hlist != null) {
@@ -428,6 +553,7 @@ public class FileTreeMapStorage extends MapStorage {
         // While more paths to handle
         while (dirs.isEmpty() == false) {
             File dir = dirs.pop();
+            if (!safePath(dir)) continue;
             dirsdone.add(dir);
             String[] dirlst = dir.list();
             if (dirlst == null) continue;
@@ -435,6 +561,7 @@ public class FileTreeMapStorage extends MapStorage {
                 if (fn.equals(".") || fn.equals(".."))
                     continue;
                 File f = new File(dir, fn);
+                if (!safePath(f)) continue;
                 if (f.isDirectory()) {   /* If directory, add to list to process */
                     dirs.add(f);
                 }
@@ -473,8 +600,10 @@ public class FileTreeMapStorage extends MapStorage {
     @Override
     public boolean setPlayerFaceImage(String playername, FaceType facetype,
             BufferOutputStream encImage) {
+        if (!safeId(playername, false)) return false;
         String baseFilename = "faces/" + facetype.id + "/" + playername + ".png";
         File ff = new File(baseTileDir, baseFilename);
+        if (!safePath(ff)) return false;
         File ffpar = ff.getParentFile();
         if (encImage == null) { // Delete?
             ff.delete();
@@ -492,43 +621,33 @@ public class FileTreeMapStorage extends MapStorage {
     @Override
     public BufferInputStream getPlayerFaceImage(String playername,
             FaceType facetype) {
+        if (!safeId(playername, false)) return null;
         String baseFilename = "faces/" + facetype.id + "/" + playername + ".png";
         File ff = new File(baseTileDir, baseFilename);
-        if (ff.exists()) {
-            if (getReadLock(baseFilename, 5000)) {
-                byte[] buf = new byte[(int) ff.length()];
-                FileInputStream fis = null;
-                try {
-                    fis = new FileInputStream(ff);
-                    fis.read(buf, 0, buf.length);   // Read whole thing
-                } catch (IOException iox) {
-                    Log.info("read (" + ff.getPath() + ") failed = " + iox.getMessage());
-                    return null;
-                } finally {
-                    if (fis != null) {
-                        try { fis.close(); } catch (IOException iox) {}
-                        fis = null;
-                    }
-                    releaseReadLock(baseFilename);
-                }
-                return new BufferInputStream(buf);
-            }
+        if (safePath(ff) && getReadLock(baseFilename, 5000)) {
+            try {
+                byte[] buf = readFile(ff, 32 * 1024 * 1024);
+                return buf == null ? null : new BufferInputStream(buf);
+            } finally { releaseReadLock(baseFilename); }
         }
         return null;
     }
-    
+
 
     @Override
     public boolean hasPlayerFaceImage(String playername, FaceType facetype) {
+        if (!safeId(playername, false)) return false;
         String baseFilename = "faces/" + facetype.id + "/" + playername + ".png";
         File ff = new File(baseTileDir, baseFilename);
-        return ff.exists();
+        return safePath(ff) && ff.isFile();
     }
 
     @Override
     public boolean setMarkerImage(String markerid, BufferOutputStream encImage) {
+        if (!safeId(markerid, true)) return false;
         String baseFilename = "_markers_/" + markerid + ".png";
         File ff = new File(baseTileDir, baseFilename);
+        if (!safePath(ff)) return false;
         File ffpar = ff.getParentFile();
         if (encImage == null) { // Delete?
             ff.delete();
@@ -545,35 +664,24 @@ public class FileTreeMapStorage extends MapStorage {
 
     @Override
     public BufferInputStream getMarkerImage(String markerid) {
+        if (!safeId(markerid, true)) return null;
         String baseFilename = "_markers_/" + markerid + ".png";
         File ff = new File(baseTileDir, baseFilename);
-        if (ff.exists()) {
-            if (getReadLock(baseFilename, 5000)) {
-                byte[] buf = new byte[(int) ff.length()];
-                FileInputStream fis = null;
-                try {
-                    fis = new FileInputStream(ff);
-                    fis.read(buf, 0, buf.length);   // Read whole thing
-                } catch (IOException iox) {
-                    Log.info("read (" + ff.getPath() + ") failed = " + iox.getMessage());
-                    return null;
-                } finally {
-                    if (fis != null) {
-                        try { fis.close(); } catch (IOException iox) {}
-                        fis = null;
-                    }
-                    releaseReadLock(baseFilename);
-                }
-                return new BufferInputStream(buf);
-            }
+        if (safePath(ff) && getReadLock(baseFilename, 5000)) {
+            try {
+                byte[] buf = readFile(ff, 32 * 1024 * 1024);
+                return buf == null ? null : new BufferInputStream(buf);
+            } finally { releaseReadLock(baseFilename); }
         }
         return null;
     }
 
     @Override
     public boolean setMarkerFile(String world, String content) {
+        if (!safeId(world, false)) return false;
         String baseFilename = "_markers_/marker_" + world + ".json";
         File ff = new File(baseTileDir, baseFilename);
+        if (!safePath(ff)) return false;
         File ffpar = ff.getParentFile();
         if (content == null) { // Delete?
             ff.delete();
@@ -591,101 +699,77 @@ public class FileTreeMapStorage extends MapStorage {
 
     @Override
     public String getMarkerFile(String world) {
+        if (!safeId(world, false)) return null;
         String baseFilename = "_markers_/marker_" + world + ".json";
         File ff = new File(baseTileDir, baseFilename);
-        if (ff.exists()) {
-            if (getReadLock(baseFilename, 5000)) {
-                byte[] buf = new byte[(int) ff.length()];
-                FileInputStream fis = null;
-                try {
-                    fis = new FileInputStream(ff);
-                    fis.read(buf, 0, buf.length);   // Read whole thing
-                } catch (IOException iox) {
-                    Log.info("read (" + ff.getPath() + ") failed = " + iox.getMessage());
-                    return null;
-                } finally {
-                    if (fis != null) {
-                        try { fis.close(); } catch (IOException iox) {}
-                        fis = null;
-                    }
-                    releaseReadLock(baseFilename);
-                }
-                return new String(buf, UTF8);
-            }
+        if (safePath(ff) && getReadLock(baseFilename, 5000)) {
+            try {
+                byte[] buf = readFile(ff, 64 * 1024 * 1024);
+                return buf == null ? null : new String(buf, UTF8);
+            } finally { releaseReadLock(baseFilename); }
         }
         return null;
     }
-    
+
     @Override
     // For external web server only
-    public String getMarkersURI(boolean login_enabled) {
-        return login_enabled?"standalone/markers.php?marker=":"tiles/";
+    public String getMarkersURI() {
+        return "tiles/";
     }
 
     @Override
     // For external web server only
-    public String getTilesURI(boolean login_enabled) {
-        return login_enabled?"standalone/tiles.php?tile=":"tiles/";
+    public String getTilesURI() {
+        return "tiles/";
     }
 
     private boolean replaceFile(File f, byte[] b, int len) {
-        return replaceFile(f, b, len, System.currentTimeMillis());
-    }
-    
-    private boolean replaceFile(File f, byte[] b, int len, long timestamp) {
-        boolean done = false;
-        File fold = new File(f.getPath() + ".old");
-        File fnew = new File(f.getPath() + ".new");
-        int retrycnt = 0;
-        while (!done) {
-            RandomAccessFile raf = null;
-            try {
-                raf = new RandomAccessFile(fnew, "rw");
-                raf.write(b, 0, len);
-                raf.close();
-                raf = null;
-                // Now swap names
-                if (f.exists()) {
-                    f.renameTo(fold);
-                    fnew.renameTo(f);
-                    fold.delete();
-                }
-                else {
-                    fnew.renameTo(f);
-                }
-                // Use the supplied timestamp
-                f.setLastModified(timestamp);
-                done = true;
-            } catch (IOException iox) {
-                if (raf != null) { try { raf.close(); } catch (IOException x) {} }
-                if(retrycnt < MAX_WRITE_RETRIES) {
-                    Debug.debug("Image file " + f.getPath() + " - unable to write - retry #" + retrycnt);
-                    try { Thread.sleep(50 << retrycnt); } catch (InterruptedException ix) { return false; }
-                    retrycnt++;
-                }
-                else {
-                    Log.info("Image file " + f.getPath() + " - unable to write - failed");
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-    
-    @Override
-    public void addPaths(StringBuilder sb, DynmapCore core) {
-        String p = core.getTilesFolder().getAbsolutePath();
-        if(!p.endsWith("/"))
-            p += "/";
-        sb.append("$tilespath = \'");
-        sb.append(WebAuthManager.esc(p));
-        sb.append("\';\n");
-        sb.append("$markerspath = \'");
-        sb.append(WebAuthManager.esc(p));
-        sb.append("\';\n");
-        
-        // Need to call base to add webpath
-        super.addPaths(sb, core);
+        return replaceFile(f, b, len, System.currentTimeMillis(), false);
     }
 
+    private boolean replaceFile(File f, byte[] b, int len, long timestamp) {
+        return replaceFile(f, b, len, timestamp, true);
+    }
+
+    private boolean replaceFile(File f, byte[] b, int len, long timestamp, boolean rendererWrite) {
+        if (!safePath(f)) return false;
+        var usage = rendererWrite ? core.getStorageUsage() : null;
+        long oldBytes = 0;
+        try {
+            if (java.nio.file.Files.isRegularFile(f.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                oldBytes = java.nio.file.Files.readAttributes(f.toPath(), java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS).size();
+        } catch (IOException failure) { return false; }
+        var reservation = usage == null ? null : usage.reserve(f.toPath(), Math.max(0L, (long)len - oldBytes), len);
+        if (usage != null && reservation == null) return false;
+        File pending = new File(f.getPath() + ".new");
+        try {
+            for (int retry = 0; retry <= MAX_WRITE_RETRIES; retry++) {
+                try {
+                    try (var stream = java.nio.file.Files.newOutputStream(pending.toPath(),
+                            java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                            java.nio.file.StandardOpenOption.WRITE, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                        stream.write(b, 0, len);
+                    }
+                    try { java.nio.file.Files.move(pending.toPath(), f.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+                    catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                        java.nio.file.Files.move(pending.toPath(), f.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    f.setLastModified(timestamp);
+                    if (reservation != null) reservation.commit();
+                    return true;
+                } catch (IOException failure) {
+                    if (retry == MAX_WRITE_RETRIES) { Log.warning("Could not write local map image"); return false; }
+                    try { Thread.sleep(50L << retry); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+                }
+            }
+            return false;
+        } finally {
+            if (reservation != null) reservation.close();
+            // Do not follow or remove someone else's symlink.
+            if (!java.nio.file.Files.isSymbolicLink(pending.toPath())) pending.delete();
+        }
+    }
 }
