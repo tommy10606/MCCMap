@@ -65,6 +65,7 @@ public class MapManager {
     private volatile int fullRenderPlayers = 1;
     private int fullRenderOnlineWorkers = 1;
     private int progressinterval = 100;
+    private long progressLogIntervalNanos=java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
     private int tileupdatedelay = 30;
     private int savependingperiod = 15 * 60; // every 15 minutes, by default
     private int defaulttilescale = 0;
@@ -330,6 +331,7 @@ public class MapManager {
         private FullRenderOrder fullOrder = new FullRenderOrder();
         private long startedAtMillis=System.currentTimeMillis();
         private final RenderProgress progress = new RenderProgress();
+        private final RenderProgressLog progressLog=new RenderProgressLog();
         private volatile MissingTileCheck.Snapshot inventorySnapshot;
         private volatile boolean inventoryRequested;
 
@@ -1043,7 +1045,7 @@ public class MapManager {
                     if(!cache.isEmpty()) {
                         rendercnt++;
                         timeaccum += System.currentTimeMillis() - tstart;
-                        if (((rendercnt % progressinterval) == 0) && (!quiet)) {
+                        if (((rendercnt % progressinterval) == 0) && (!quiet) && progressLog.due(System.nanoTime(),progressLogIntervalNanos)) {
                             progress.sample(progressCompleted(), System.nanoTime() / 1000000, fullRenderPlayers > 0);
                             sendMessage(progressSummary());
                             skipcnt = 0;
@@ -1407,6 +1409,7 @@ public class MapManager {
         fullRenderOnlineWorkers = Math.max(1,Math.min(64,configuration.getInteger("full-render-speed/players-online-max-workers",1)));
         progressinterval = configuration.getInteger("progressloginterval", 100);
         if(progressinterval < 100) progressinterval = 100;
+        progressLogIntervalNanos=RenderProgressLog.interval(configuration);
         saverestorepending = ProgressCheckpoint.enabled(configuration);
         tileupdatedelay = configuration.getInteger("tileupdatedelay", 30);
         defaulttilescale = configuration.getInteger("defaulttilescale", 0);
@@ -2049,6 +2052,9 @@ public class MapManager {
     }
 
     private volatile MissingTileCheck missingTileCheck;
+    private volatile LegacyTileCleanup legacyTileCleanup;
+    private volatile BackgroundTaskLog backgroundTaskLog;
+    String legacyCleanupPauseReason(){return pausefullrenders||pauseupdaterenders?"manual pause":fullRenderPlayers>0&&(tpspausefullrenders||tpspauseupdaterenders)?"low TPS":null;}
 
     public void startRendering() {
         missingTileCheck = new MissingTileCheck(core, this);
@@ -2059,6 +2065,7 @@ public class MapManager {
         if (boostWorkers > 0) fullRenderBoostPool = Executors.newFixedThreadPool(boostWorkers, r -> {
             Thread t = new OurThreadFactory().newThread(r); t.setName("MCCMap Full Render Boost"); return t;
         });
+        legacyTileCleanup=new LegacyTileCleanup(core,this);
         naturalRenders = new NaturalRenders();
         scheduleDelayedJob(naturalRenders, 5000);
         tileQueue.start();
@@ -2080,6 +2087,7 @@ public class MapManager {
             try { staleTileRefresh = new StaleTileRefresh(core, this); }
             catch (java.io.IOException | RuntimeException failure) { Log.warning("Stale tile refresh could not start; normal rendering remains enabled"); }
         }
+        backgroundTaskLog=new BackgroundTaskLog(core.configuration,this::backgroundTaskSummary);
     }
 
     private volatile StaleTileRefresh staleTileRefresh;
@@ -2107,6 +2115,8 @@ public class MapManager {
     }
 
     public void stopRendering() {
+        var backgroundLog=backgroundTaskLog;backgroundTaskLog=null;if(backgroundLog!=null)backgroundLog.close();
+        var legacy=legacyTileCleanup;legacyTileCleanup=null;if(legacy!=null)legacy.close();
         var automatic = naturalRenders; if (automatic != null) automatic.stop();
         if(checkpointWorker!=null){checkpointWorker.shutdownNow();try{checkpointWorker.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}}
         var check = missingTileCheck; missingTileCheck = null; if(check != null)check.close();
@@ -2208,6 +2218,18 @@ public class MapManager {
      */
     private static void statsMessage(DynmapCommandSender sender, String text) { sender.sendMessage(StatsColors.format(text)); }
 
+    String backgroundTaskSummary() {
+        var parts=new java.util.ArrayList<String>();
+        var automatic=naturalRenders;parts.add(automatic==null?"Natural rendering: not started":automatic.describe());
+        var refresh=staleTileRefresh;
+        if(refresh==null)parts.add("Stale refresh: disabled");
+        else {var state=refresh.describe();parts.add("Stale refresh: "+state.get(1).trim()+"; "+state.get(2).trim());}
+        var missing=missingTileCheck;if(missing!=null)parts.add(String.join("; ",missing.describe()));
+        var legacy=legacyTileCleanup;if(legacy!=null)parts.add(legacy.describe());
+        if(tileQueue!=null)parts.add("Tile updates queued: "+tileQueue.size());
+        return String.join(" | ",parts);
+    }
+
     public void printProgress(DynmapCommandSender sender, String world) {
         boolean any = false;
         synchronized (lock) {
@@ -2245,6 +2267,7 @@ public class MapManager {
         statsMessage(sender, "Render pauses: updates=" + (pauseupdaterenders ? "manual" : tpspauseupdaterenders ? "low TPS" : "none")
             + ", full/radius=" + (pausefullrenders ? "manual" : tpspausefullrenders ? "low TPS" : "none")
             + ", storage=" + (storagePauseReason() == null ? "none" : storagePauseReason()));
+        var legacy=legacyTileCleanup;if(legacy!=null)statsMessage(sender,legacy.describe());
         statsMessage(sender,core.getHttpsStatus());
         statsMessage(sender, "Tile Render Statistics:");
         MapStats tot = new MapStats();

@@ -1,6 +1,6 @@
 # Web connection logging and native overlays
 
-Available in MCCMap 1.0.1.
+Available in MCCMap 1.0.2.
 
 ## Optional connection log
 

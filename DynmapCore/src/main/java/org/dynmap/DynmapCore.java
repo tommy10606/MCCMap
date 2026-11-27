@@ -1129,6 +1129,7 @@ public class DynmapCore implements DynmapCommonAPI {
         "updaterender",
         "stats",
         "progress",
+        "status",
         "naturalrender",
         "tpscheck",
         "triggerstats",
@@ -1190,6 +1191,7 @@ public class DynmapCore implements DynmapCommonAPI {
         new CommandInfo("mccmap", "cancelrender", "<world>", "Cancels any active renders of world <world>."),
         new CommandInfo("mccmap", "stats", "Show render statistics."),
         new CommandInfo("mccmap", "progress", "[world]", "Show per-map render percentage and estimated time remaining."),
+        new CommandInfo("mccmap", "status", "[world]", "Alias for progress."),
         new CommandInfo("mccmap", "naturalrender", "[status|on|off|resume]", "Control automatic background map rendering."),
         new CommandInfo("mccmap", "tpscheck", "off|on|status", "Bypass TPS checks for 24 hours, restore them, or show status."),
         new CommandInfo("mccmap", "triggerstats", "Show render update trigger statistics."),
@@ -1722,7 +1724,7 @@ public class DynmapCore implements DynmapCommonAPI {
                     mapManager.printStats(sender, args[1]);
             } else if (c.equals("naturalrender") && checkPlayerPermission(sender, "fullrender")) {
                 mapManager.naturalRenderControl(sender, args.length > 1 ? args[1].toLowerCase(java.util.Locale.ROOT) : "status");
-            } else if (c.equals("progress") && checkPlayerPermission(sender, "stats")) {
+            } else if ((c.equals("progress") || c.equals("status")) && checkPlayerPermission(sender, "stats")) {
                 mapManager.printProgress(sender, args.length > 1 ? args[1] : null);
             } else if (c.equals("triggerstats") && checkPlayerPermission(sender, "stats")) {
                 mapManager.printTriggerStats(sender);
@@ -1922,7 +1924,7 @@ public class DynmapCore implements DynmapCommonAPI {
             }
         } else if ((subcommand.equals("purgeworld") && checkPlayerPermission(sender, "purgeworld"))
                 || (subcommand.equals("stats") && checkPlayerPermission(sender, "stats"))
-                || (subcommand.equals("progress") && checkPlayerPermission(sender, "stats"))
+                || ((subcommand.equals("progress") || subcommand.equals("status")) && checkPlayerPermission(sender, "stats"))
                 || (subcommand.equals("resetstats") && checkPlayerPermission(sender, "resetstats"))) {
             if (args.length == 2) {
                 return getWorldSuggestions(args[1]);

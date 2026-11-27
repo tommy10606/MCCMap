@@ -111,7 +111,7 @@ final class StaleTileRefresh implements AutoCloseable {
         var jobs=saved.getNodes("pending");if(jobs!=null){if(jobs.size()>200000)throw new IOException("Stale checkpoint queue limit");for(var n:jobs){var c=decode(n);if(c!=null)pending.add(c);}}
         long remaining=Math.max(0,Math.min(TimeUnit.DAYS.toMillis(7),(long)saved.getLong("next-render",0)-System.currentTimeMillis()));nextRender=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(remaining);
         if(!scanCycle)nextScan=Math.max(startupDeadline,System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(0,Math.min(TimeUnit.DAYS.toMillis(30),(long)saved.getLong("next-scan",0)-System.currentTimeMillis()))));
-        pendingCount=pending.size();Log.info("Restored stale scan progress and "+pending.size()+" paced refresh jobs");
+        pendingCount=pending.size();Log.verboseinfo("Restored stale scan progress and "+pending.size()+" paced refresh jobs");
     }
     private void saveCheckpoint(){if(checkpoint==null||!restored)return;try{
         history.flush();var n=new ConfigurationNode();n.put("layout",layout());n.put("scope",scopeIndex);n.put("cursor",cursor.save());n.put("active",scanCycle);

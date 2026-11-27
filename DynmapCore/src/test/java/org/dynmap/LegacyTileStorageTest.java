@@ -37,13 +37,13 @@ class LegacyTileStorageTest {
         var image=new BufferedImage(128,128,BufferedImage.TYPE_INT_ARGB);
         assertTrue(storage.getTile(world,map,x,y,zoom,MapType.ImageVariant.STANDARD).write(42,image,100));
     }
-    @Test void oldBaseTileIsDeletedOnlyAfterEveryReplacementExistsIncludingNegativeCoordinates() throws Exception {
+    @Test void upscaledOldBaseTilesWaitForReplacementOverviewsIncludingNegativeCoordinates() throws Exception {
         for(int oldX:new int[]{0,-184}) {
             int oldY=oldX==0?0:-137;var file=old("flat",oldX,oldY,0x00ff00);
             for(int dx=0;dx<4;dx++)for(int dy=0;dy<4;dy++) {
                 assertTrue(Files.exists(file));render(oldX*4+dx,oldY*4+dy,0);
             }
-            assertFalse(Files.exists(file));
+            assertTrue(Files.exists(file),"upscaled sources must wait for replacement overviews too");
         }
     }
     @Test void oldZoomTileSurvivesPartiallyGeneratedNewOverviews() throws Exception {
@@ -134,9 +134,9 @@ class LegacyTileStorageTest {
         assertTrue(tile.write(55,pattern,101));
         assertFalse(Files.exists(oldPng));assertTrue(Files.exists(oldJpeg));assertTrue(Files.exists(decoy));
         int left=Math.floorDiv(x,4)*4,top=Math.floorDiv(y+1,4)*4+4;
-        // Retire the JPEG only after all sixteen correctly mapped native bases exist.
+        // Upscaled JPEG coverage also supplies intermediate zoom levels until those are ready.
         for(int dx=0;dx<4;dx++)for(int dy=0;dy<4;dy++)render(left+dx,top-1-dy,0);
-        assertFalse(Files.exists(oldJpeg));assertTrue(Files.exists(decoy));
+        assertTrue(Files.exists(oldJpeg));assertTrue(Files.exists(decoy));
     }
 
     @Test void recoveredTileContentChangesInvalidateBrowserCacheEvenIfTheTimestampIsUnchanged() throws Exception {
@@ -195,6 +195,12 @@ class LegacyTileStorageTest {
         doReturn(storage).when(world).getMapStorage();doCallRealMethod().when(hd).purgeOldTiles(eq(world),any(org.dynmap.utils.TileFlags.class),eq(2000L));
         hd.purgeOldTiles(world,new org.dynmap.utils.TileFlags(),2000);
         assertFalse(Files.exists(old));assertTrue(Files.exists(fresh));
+    }
+
+    @Test void inlineRetirementAlsoProtectsAnotherActiveMapLayout() throws Exception {
+        when(map.getLegacyTileScaleShift()).thenReturn(0);var file=old("flat",0,0,0x00ff00);
+        var other=mock(MapType.class);when(other.getPrefix()).thenReturn("flat");when(other.getVariants()).thenReturn(new MapType.ImageVariant[]{MapType.ImageVariant.STANDARD});world.maps.add(other);
+        render(0,0,0);assertTrue(Files.exists(file));
     }
 
 }

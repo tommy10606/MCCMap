@@ -31,7 +31,9 @@ commands:
            /<command> updaterender worldname x z mapname - Render updates starting at location x,z on world 'worldname' for given map
            /<command> cancelrender - Cancels any active renders on current world
            /<command> cancelrender world - Cancels any active renders of world 'world'
-           /<command> stats - Show storage usage, render statistics, and stale-refresh progress.
+           /<command> stats - Show storage usage, cleanup, render statistics, and stale-refresh progress.
+           /<command> progress [world] - Show current render progress.
+           /<command> status [world] - Alias for progress.
            /<command> tpscheck off|on|status - Bypass TPS checks for 24 hours, restore them, or show status.
            /<command> triggerstats - Show render trigger statistics
            /<command> resetstats - Reset render statistics.

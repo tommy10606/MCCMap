@@ -424,6 +424,19 @@ maxchunkspertick: 200
 
 # Progress report interval for fullrender/radiusrender, in tiles.  Must be 100 or greater
 progressloginterval: 100
+# Minimum time between unsolicited manual-render progress lines. 0 disables them.
+# Start/phase/completion notices remain; stats/progress/status queries are immediate.
+render-progress-log-interval-seconds: 60
+# One combined background-task status line per interval (not one per task).
+# 0 disables periodic summaries; warnings/errors and on-demand stats remain.
+background-task-log-interval-minutes: 30
+
+# Retire only verified redundant files in known compatible raster layouts.
+# Works during manual renders and storage pauses; pauses for low TPS with players.
+legacy-tile-cleanup:
+  enabled: true
+  startup-delay-seconds: 60
+  checks-per-batch: 64
 
 # Parallel fullrender: if defined, number of concurrent threads used for fullrender or radiusrender
 #   Note: setting this will result in much more intensive CPU use, some additional memory use.  Caution should be used when

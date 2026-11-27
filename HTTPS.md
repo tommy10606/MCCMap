@@ -2,7 +2,7 @@
 
 MCCMap can obtain and renew a Let's Encrypt certificate itself. HTTPS is disabled
 by default; an existing HTTP installation is unchanged until you enable it.
-Rendering and certificate work run separately. The plugin version is 1.0.1.
+Rendering and certificate work run separately. The plugin version is 1.0.2.
 
 ## Requirements
 

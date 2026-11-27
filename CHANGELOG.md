@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.2
+
+- Combine routine background-task status into one console line every 30 minutes,
+  configurable or disabled independently of manual-render progress and warnings.
+
+- Rate-limit manual-render progress to once per minute by default; add a status
+  alias and a configuration option to suppress periodic progress entirely.
+- Reclaim verified redundant legacy base/zoom tiles in bounded, restartable batches;
+  report cleanup in stats and retain incomplete, active, unknown or unsafe layouts.
+- Update the Paper API/development bundle pin to 26.3 build 263 after checking the
+  official latest stable release.
+
 ## 1.0.1
 
 - Redirect plain HTTP GET/HEAD on the HTTPS map port to the configured HTTPS

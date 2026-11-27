@@ -27,8 +27,8 @@ dependencies {
     testImplementation('com.sk89q.worldedit.worldedit-libs:core:7.4.6') { transitive = false }
     testImplementation('net.skinsrestorer:skinsrestorer-api:15.12.6') { transitive = false }
     testRuntimeOnly 'com.google.code.gson:gson:2.15.0'
-    testImplementation 'io.papermc.paper:paper-api:26.3.build.253-stable'
-    compileOnly 'io.papermc.paper:paper-api:26.3.build.253-stable'
+    testImplementation 'io.papermc.paper:paper-api:26.3.build.263-stable'
+    compileOnly 'io.papermc.paper:paper-api:26.3.build.263-stable'
     compileOnly('net.luckperms:api:5.5')  { transitive = false }
     compileOnly('net.skinsrestorer:skinsrestorer-api:15.12.6')  { transitive = false }
     implementation(project(":dynmap-api"))  { transitive = false }

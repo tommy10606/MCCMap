@@ -21,3 +21,8 @@ of whether the plugin compiles. Check modern block-state palettes and world heig
 
 Retain Apache 2.0 and applicable third-party notices. Clearly mark modified files.
 Report fork issues to this fork's maintainer, not upstream Dynmap support.
+
+Before each build, check PaperMC's official downloads service for the latest stable
+release/build, review the changes, and update both the Paper API and paperweight
+bundle pins when compatible. Record the selected build in README.md and
+DEPENDENCIES.md. Keep explicit pins; do not silently select unstable releases.

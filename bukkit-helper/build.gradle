@@ -1,7 +1,7 @@
 // Modified for MCCMap: Paper-only support and a read-only website (2026).
 plugins { id 'io.papermc.paperweight.userdev' }
 dependencies {
-    paperweight.paperDevBundle('26.3.build.253-stable')
+    paperweight.paperDevBundle('26.3.build.263-stable')
     implementation project(':dynmap-api')
     implementation project(':DynmapCore')
     implementation project(':DynmapCoreAPI')

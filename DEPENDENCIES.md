@@ -1,13 +1,13 @@
-# MCCMap dependencies — November 24, 2026
+# MCCMap dependencies — November 27, 2026
 
-MCCMap version **1.0.1**. Map storage is local-file-only. SQL/S3
+MCCMap version **1.0.2**. Map storage is local-file-only. SQL/S3
 implementations and PostgreSQL, AWS SDK, EventStream and Reactive Streams runtime
 libraries have been removed. No JDBC drivers or remote-storage clients are bundled.
 
 | Component | Version / ownership |
 | --- | --- |
 | Java | 25 |
-| Paper API / internals | 26.3 build 253; provided by Paper |
+| Paper API / internals | 26.3 build 263; provided by Paper |
 | Gradle | 9.9.0; wrapper distribution checksum pinned |
 | Shadow | 9.6.1 |
 | paperweight | 2.0.0-beta.24 |
@@ -34,3 +34,7 @@ remain included. See build files and the Gradle wrapper for exact build/test pin
 Primary sources: https://repo.maven.apache.org/maven2/,
 https://jetty.org/security.html, https://github.com/OWASP/java-html-sanitizer/security,
 https://osv.dev/, https://docs.papermc.io/.
+
+Paper preflight (November 27, 2026): the official v3 downloads service lists 26.3
+build 263 as the newest stable build. API and development bundle pins advance
+from 253 to 263; older alternate download channels were not selected.

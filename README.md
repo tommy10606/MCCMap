@@ -6,7 +6,7 @@ This fork is maintained separately and is not endorsed or supported by the Dynma
 
 ## Target
 
-- Paper **26.3 build 253**, API `26.3.build.253-stable`.
+- Paper **26.3 build 263**, API `26.3.build.263-stable`.
 - Java **25**.
 - One Paper adapter using Mojang-mapped server internals. Older versions, standalone
   Spigot/CraftBukkit, Forge, Fabric, and Folia are outside this fork's support scope.
@@ -52,7 +52,7 @@ staging tests and certificate backup instructions.
 ## Dependencies
 
 See `DEPENDENCIES.md` for the dependency audit, compatibility pins and runtime
-ownership. The current version is 1.0.1; changing the JAR refreshes
+ownership. The current version is 1.0.2; changing the JAR refreshes
 bundled assets through a build fingerprint without a version bump.
 
 ## Build
@@ -69,7 +69,7 @@ Windows:
 gradlew.bat :paper:shadowJar :paper:test :DynmapCore:test
 ```
 
-The installable file is `target/MCCMap-1.0.1-paper.jar`. Other module JARs are build
+The installable file is `target/MCCMap-1.0.2-paper.jar`. Other module JARs are build
 components, not standalone plugins. Gradle downloads the matching Paper development
 bundle; do not bundle or redistribute a Minecraft server JAR with this source.
 
@@ -150,7 +150,7 @@ once at startup in the background. Status and download links appear only in the
 console. There are no periodic checks, player notifications, update commands or
 automatic downloads/installations. Set `update-checker.enabled: false` to disable;
 `update-checker.include-prereleases` defaults to false. Drafts are always ignored.
-Use version tags such as `v1.0.1` on published releases; a tag alone is insufficient.
+Use version tags such as `v1.0.2` on published releases; a tag alone is insufficient.
 No published release means the update status is unknown, not a claim of being current.
 
 ## Full-render speed with players online
@@ -641,3 +641,42 @@ updates; worlds without a clock hide the time display. The website retains its
 24,000-tick dial; arbitrary custom timeline day lengths are not interpreted.
 Clock reads never change server time, pause state or rate. Render ETA, stale-tile
 age and checkpoint schedules use elapsed/real time independently of world clocks.
+
+## Render progress and legacy tile cleanup
+
+`/mccmap status [world]` is an alias for `/mccmap progress [world]`. A manual
+full render first fills missing tiles across its selected maps, then refreshes
+pre-existing tiles; a single map/pass completion is not completion of the whole
+job. Periodic manual progress messages are limited to once per minute by default.
+Set `render-progress-log-interval-seconds: 0` to disable periodic messages, or
+use `/mccmap quiet` for the current jobs. Start, phase and completion notices
+remain visible, and queries always return current progress.
+
+Legacy cleanup starts after 60 seconds and processes small batches off the server
+thread, including while a manual render or storage pause is active. It respects
+manual render pauses and low TPS with players online. It only examines explicitly
+known compatible preview sources and never removes an active layout. Native
+replacement images must decode correctly at the expected dimensions. Old zoom
+coverage additionally requires opaque replacement overview regions; partial,
+missing or corrupt replacements keep the source tile. Replacement mutations during
+a proof invalidate it. Unknown layouts, other formats, links and coverage requiring
+more than 4,096 native base checks per old tile are retained conservatively.
+
+The scan position and counters survive restarts. Incomplete replacement proofs are
+repeated after restart. A completed pass is repeated after 24 hours, allowing later
+renders to make more old files eligible. Only verified redundant tiles and empty
+legacy tile directories are removed; there is no recursive directory purge.
+`/mccmap stats` shows cleanup activity, checked/retained candidates, removed tiles
+and reclaimed file bytes. Actual filesystem space can differ from file lengths;
+usage and free-space displays refresh according to their existing scan schedules.
+Set `legacy-tile-cleanup.enabled: false` to disable cleanup, or adjust
+`checks-per-batch` (default 64, every 250 ms, bounded to about 25 ms of work per batch).
+
+Routine background-task console output is combined into **one line every 30 minutes**
+by default, covering natural rendering, stale refresh, missing-tile repairs and
+legacy cleanup. The first summary waits a full interval after startup; separate
+workers do not each get a logging allowance. Set
+`background-task-log-interval-minutes: 0` to disable the heartbeat, or change its
+interval. Stats/status queries do not affect the timer. Warnings/errors remain
+immediate, and manual-render progress uses its separate interval. `verbose: true`
+explicitly enables additional troubleshooting diagnostics.

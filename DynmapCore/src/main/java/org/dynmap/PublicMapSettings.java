@@ -4,6 +4,9 @@ import java.util.*;
 final class PublicMapSettings {
     static boolean migrate(ConfigurationNode config) {
         boolean changed=StaleTileRefreshSettings.migrate(config);
+        if(!config.containsKey("background-task-log-interval-minutes")){config.put("background-task-log-interval-minutes",30);changed=true;}
+        if(!config.containsKey("render-progress-log-interval-seconds")){config.put("render-progress-log-interval-seconds",60);changed=true;}
+        changed|=defaults(config,"legacy-tile-cleanup",Map.of("enabled",true,"startup-delay-seconds",60,"checks-per-batch",64));
         changed|=defaults(config,"https",Map.of("enabled",false,"domain","","public-port",0,"redirect-http",true));
         var https=config.getNode("https");
         if(https!=null)changed|=defaults(https,"letsencrypt",Map.of("enabled",true,"agree-to-terms",false,"email","","staging",false,"challenge-bindaddress","0.0.0.0","challenge-port",8080));

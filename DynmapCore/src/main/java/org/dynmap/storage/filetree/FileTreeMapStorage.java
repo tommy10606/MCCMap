@@ -30,6 +30,8 @@ public class FileTreeMapStorage extends MapStorage {
     private File baseTileDir;
     private DynmapCore core;
     private TileHashManager hashmap;
+    private final java.util.concurrent.locks.ReentrantReadWriteLock cleanupMutation=new java.util.concurrent.locks.ReentrantReadWriteLock();
+    private final java.util.concurrent.atomic.AtomicLong cleanupEpoch=new java.util.concurrent.atomic.AtomicLong();
     private static final int MAX_WRITE_RETRIES = 6;
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
@@ -218,6 +220,11 @@ public class FileTreeMapStorage extends MapStorage {
 
         @Override
         public boolean write(long hash, BufferOutputStream encImage, long timestamp) {
+            cleanupMutation.readLock().lock();
+            try {return writeTile(hash,encImage,timestamp);}
+            finally {cleanupEpoch.incrementAndGet();cleanupMutation.readLock().unlock();}
+        }
+        private boolean writeTile(long hash, BufferOutputStream encImage, long timestamp) {
             File ff = getTileFile(map.getImageFormat().getEncoding());
             List<File> ffalt = getTileFilesAltFormats();
             File ffpar = ff.getParentFile();
@@ -260,7 +267,7 @@ public class FileTreeMapStorage extends MapStorage {
             if(zoom!=0)return;
             for (var sourceLayout : map.getTilePreviewSources()) {
                 String legacy=sourceLayout.prefix();int shift=sourceLayout.scaleShift();ImageEncoding encoding=sourceLayout.encoding();
-                if(legacy.equals(map.getPrefix()) || shift < -4 || shift > 4)continue;
+                if(legacy.equals(map.getPrefix()) || shift < -4 || shift > 0 || activePrefix(world,legacy+var.variantSuffix))continue;
                 double factor=Math.scalb(1.0,shift);
                 String extension=encoding==ImageEncoding.PNG?"png":"jpg";
                 for(var source:LegacyTilePreview.sources(x,y,0,shift)) {
@@ -368,6 +375,100 @@ public class FileTreeMapStorage extends MapStorage {
             cursor.files.acknowledge();if(++visited>=Math.max(1,limit))return false;
         }
         return true;
+    }
+
+
+    static final class LegacyCandidate {
+        final java.nio.file.Path path;
+        final java.nio.file.attribute.BasicFileAttributes attributes;
+        final List<LegacyCleanupPlan.Check> checks;
+        final long epoch;
+        int index;
+        LegacyCandidate(java.nio.file.Path path,java.nio.file.attribute.BasicFileAttributes attributes,List<LegacyCleanupPlan.Check> checks,long epoch) {
+            this.path=path;this.attributes=attributes;this.checks=checks;this.epoch=epoch;
+        }
+    }
+    private boolean activePrefix(DynmapWorld world,String prefix) {
+        for(var active:world.maps)for(var variant:active.getVariants())if((active.getPrefix()+variant.variantSuffix).equals(prefix))return true;
+        return false;
+    }
+    private boolean verifiedReplacement(DynmapWorld world,MapType map,ImageVariant variant,LegacyCleanupPlan.Check check) {
+        var tile=new StorageTile(world,map,check.x(),check.y(),check.zoom(),variant);
+        if(!tile.getReadLock(1))return false;
+        try {
+            byte[] data=readFile(tile.getTileFile(),32*1024*1024);if(data==null)return false;
+            try(var input=javax.imageio.ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(data))) {
+                var readers=javax.imageio.ImageIO.getImageReaders(input);if(!readers.hasNext())return false;
+                var reader=readers.next();
+                try {
+                    reader.setInput(input,true,true);
+                    if(!reader.getFormatName().equalsIgnoreCase("PNG")||reader.getWidth(0)!=128||reader.getHeight(0)!=128)return false;
+                    var image=reader.read(0);
+                    try {
+                        if(check.zoom()>0)for(int py=check.top();py<check.bottom();py++)for(int px=check.left();px<check.right();px++)
+                            if((image.getRGB(px,py)>>>24)!=255)return false;
+                        return true;
+                    }finally{image.flush();}
+                }finally{reader.dispose();}
+            }
+        }catch(IOException|RuntimeException invalid){return false;}
+        finally{tile.releaseReadLock();tile.cleanup();}
+    }
+    /** Bounded deletion of known compatible aliases. Unknown layouts and incomplete coverage are retained. */
+    public boolean cleanupLegacyStep(DynmapWorld world,MapType map,LegacyCleanupCursor cursor,int budget)throws IOException {
+        if(!world.maps.contains(map)||map.isReadOnly()||map.getImageFormat().getEncoding()!=ImageEncoding.PNG
+                ||!safeId(world.getName(),false)||!safeId(map.getPrefix(),false))return true;
+        var sources=map.getTilePreviewSources();var variants=map.getVariants();
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(25);
+        int work=0;
+        while(cursor.source<sources.size() && work<Math.max(1,budget) && System.nanoTime()<deadline) {
+            if(Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException();
+            if(cursor.variant>=variants.length){cursor.source++;cursor.variant=0;cursor.files=new org.dynmap.utils.ScanCursor();cursor.candidate=null;continue;}
+            var source=sources.get(cursor.source);var variant=variants[cursor.variant];String oldPrefix=source.prefix()+variant.variantSuffix;
+            if(!safeId(source.prefix(),false)||!source.prefix().matches("[A-Za-z0-9_.-]{1,128}")||activePrefix(world,oldPrefix)){cursor.variant++;cursor.files=new org.dynmap.utils.ScanCursor();cursor.candidate=null;continue;}
+            File oldRoot=new File(baseTileDir,world.getName()+"/"+oldPrefix);
+            if(!safePath(oldRoot)){cursor.variant++;cursor.files=new org.dynmap.utils.ScanCursor();cursor.candidate=null;continue;}
+            var path=cursor.files.next(oldRoot.toPath());
+            if(path==null){cursor.variant++;cursor.files=new org.dynmap.utils.ScanCursor();cursor.candidate=null;continue;}
+            if(cursor.candidate==null) {
+                work++;cursor.examined++;
+                var match=java.util.regex.Pattern.compile("(?:(z{1,30})_)?(-?[0-9]+)_(-?[0-9]+)[.](png|jpg)").matcher(path.getFileName().toString());
+                try {
+                    if(!match.matches()||!match.group(4).equals(source.encoding().getFileExt())){cursor.retained++;cursor.files.acknowledge();continue;}
+                    int x=Integer.parseInt(match.group(2)),y=Integer.parseInt(match.group(3)),zoom=match.group(1)==null?0:match.group(1).length();
+                    var expected=oldRoot.toPath().resolve((x>>5)+"_"+(y>>5)).resolve(path.getFileName()).toAbsolutePath().normalize();
+                    var checks=LegacyCleanupPlan.create(x,y,zoom,source.scaleShift());
+                    if(checks==null||!safePath(path.toFile())||!path.toAbsolutePath().normalize().equals(expected)){cursor.retained++;cursor.files.acknowledge();continue;}
+                    var attributes=java.nio.file.Files.readAttributes(path,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    if(!attributes.isRegularFile()){cursor.retained++;cursor.files.acknowledge();continue;}
+                    cursor.candidate=new LegacyCandidate(path,attributes,checks,cleanupEpoch.get());
+                }catch(NumberFormatException|java.nio.file.NoSuchFileException invalid){cursor.retained++;cursor.files.acknowledge();continue;}
+            }
+            var candidate=cursor.candidate;
+            boolean valid=true;
+            while(candidate.index<candidate.checks.size()&&work<Math.max(1,budget)&&System.nanoTime()<deadline) {
+                work++;if(!verifiedReplacement(world,map,variant,candidate.checks.get(candidate.index++))){valid=false;break;}
+            }
+            if(valid&&candidate.index<candidate.checks.size())return false;
+            if(valid&&cleanupMutation.writeLock().tryLock())try {
+                if(candidate.epoch!=cleanupEpoch.get()||!world.maps.contains(map)||map.isReadOnly()||activePrefix(world,oldPrefix)||!safePath(path.toFile()))valid=false;
+                else {
+                    var current=java.nio.file.Files.readAttributes(path,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    if(!current.isRegularFile()||current.size()!=candidate.attributes.size()||!current.lastModifiedTime().equals(candidate.attributes.lastModifiedTime())
+                            ||!java.util.Objects.equals(current.fileKey(),candidate.attributes.fileKey()))valid=false;
+                    else if(java.nio.file.Files.deleteIfExists(path)){
+                        cursor.deleted++;cursor.bytes+=current.size();
+                        for(var directory:List.of(path.getParent(),oldRoot.toPath()))if(safePath(directory.toFile())&&!activePrefix(world,oldPrefix))
+                            try{java.nio.file.Files.delete(directory);}catch(java.nio.file.DirectoryNotEmptyException|java.nio.file.NoSuchFileException notEmpty){}catch(IOException ignored){}
+                    }
+                }
+            }catch(java.nio.file.NoSuchFileException removed){valid=false;}
+            finally{cleanupMutation.writeLock().unlock();}
+            else valid=false;
+            if(!valid)cursor.retained++;
+            cursor.candidate=null;cursor.files.acknowledge();
+        }
+        return cursor.source>=sources.size();
     }
 
     public FileTreeMapStorage() {
@@ -580,6 +681,11 @@ public class FileTreeMapStorage extends MapStorage {
 
     @Override
     public void purgeMapTiles(DynmapWorld world, MapType map) {
+        cleanupMutation.readLock().lock();
+        try {purgeMapTilesUnprotected(world,map);}
+        finally {cleanupEpoch.incrementAndGet();cleanupMutation.readLock().unlock();}
+    }
+    private void purgeMapTilesUnprotected(DynmapWorld world, MapType map) {
         File base = new File(baseTileDir, world.getName()); // Get base directory for world
         List<MapType> mtlist;
 
