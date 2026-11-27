@@ -90,6 +90,8 @@ public class DynmapCore implements DynmapCommonAPI {
     private String platform = null;
     private String platformVersion = null;
     private Server webServer = null;
+    private org.dynmap.web.https.NativeHttps nativeHttps;
+    private boolean invalidHttps;
     private String webhostname = null;
     private int webport = 0;
     private HandlerRouter router = null;
@@ -875,7 +877,14 @@ public class DynmapCore implements DynmapCommonAPI {
 
         webServer = new Server(pool);
 
-        NetworkTrafficServerConnector connector = new NetworkTrafficServerConnector(webServer);
+        invalidHttps=false;nativeHttps=null;
+        try {
+            var tls=org.dynmap.web.https.HttpsSettings.read(configuration,webport);
+            if(tls!=null)nativeHttps=new org.dynmap.web.https.NativeHttps(tls,getDataFolder().toPath(),getFile(getWebPath()).toPath());
+        } catch(Exception failure) {
+            invalidHttps=true;Log.severe("HTTPS configuration or private certificate storage is invalid; web map disabled. Check https settings and TLS file permissions. HTTP fallback is disabled.");
+        }
+        NetworkTrafficServerConnector connector = nativeHttps==null ? new NetworkTrafficServerConnector(webServer) : nativeHttps.connector(webServer);
         if (configuration.getBoolean("webserver-connection-log/enabled", false)) {
             try {
                 java.nio.file.Path logFolder = getDataFolder().toPath().toAbsolutePath().normalize().resolve("logs");
@@ -899,7 +908,7 @@ public class DynmapCore implements DynmapCommonAPI {
         webServer.addBean(new org.eclipse.jetty.server.ConnectionLimit(maxOpenConnections, connector));
         if(webhostname.equals("0.0.0.0") == false)
             connector.setHost(webhostname);
-        connector.setPort(webport);
+        connector.setPort(invalidHttps?8123:webport);
         webServer.setConnectors(new Connector[]{connector});
 
         webServer.setStopAtShutdown(true);
@@ -941,7 +950,7 @@ public class DynmapCore implements DynmapCommonAPI {
         contextHandler.clearAliasChecks();
         if (allow_symlinks) contextHandler.addAliasCheck(
             new org.eclipse.jetty.server.SymlinkAllowedResourceAliasChecker(contextHandler.getCoreContextHandler()));
-        webServer.setHandler(contextHandler.getCoreContextHandler());
+        webServer.setHandler(nativeHttps==null?contextHandler.getCoreContextHandler():nativeHttps.protect(contextHandler.getCoreContextHandler()));
 
         addServlet("/up/configuration", new ClientConfigurationServlet(this));
         addServlet("/standalone/config.js", new ConfigJSServlet(this));
@@ -965,18 +974,26 @@ public class DynmapCore implements DynmapCommonAPI {
 
 
     public void startWebserver() {
+        if(invalidHttps)return;
         try {
-            if(webServer != null) {
-                webServer.start();
-                Log.info("Web server started on address " + webhostname + ":" + webport);
+            if(webServer!=null) {
+                if(nativeHttps!=null)nativeHttps.start(webServer,this::startMapListener);
+                else startMapListener();
             }
-        } catch (Exception e) {
-            Log.severe("Failed to start WebServer on address " + webhostname + ":" + webport + " : " + e.getMessage());
-        }
+        } catch(Exception failure) {Log.severe("Failed to initialize web listener; check bind addresses, ports and HTTPS settings");}
     }
+    private void startMapListener() {
+        try {
+            if(webServer!=null&&!webServer.isStarted()) {
+                webServer.start();
+                Log.info(nativeHttps==null?"Web server started on address "+webhostname+":"+webport:"HTTPS web map started: "+nativeHttps.url());
+            }
+        } catch(Exception failure) {throw new IllegalStateException("Web listener could not start",failure);}
+    }
+    public String getHttpsStatus(){return invalidHttps?"HTTPS: invalid configuration; web listener disabled":nativeHttps==null?"HTTPS: disabled":nativeHttps.describe();}
 
     public void disableCore() {
-
+        if(nativeHttps!=null){nativeHttps.close();nativeHttps=null;}
         if (webServer != null) {
             try {
                 webServer.stop();
@@ -1774,6 +1791,9 @@ public class DynmapCore implements DynmapCommonAPI {
             else if (c.equals("url") && checkPlayerPermission(sender, "url")) {
                 if (publicURL.length() > 0) {
                     sender.sendMessage("MCCMap URL for this server is: " + publicURL);
+                }
+                else if (nativeHttps != null) {
+                    sender.sendMessage("MCCMap URL for this server is: " + nativeHttps.url());
                 }
                 else {
                     sender.sendMessage("URL of MCCMap not configured");

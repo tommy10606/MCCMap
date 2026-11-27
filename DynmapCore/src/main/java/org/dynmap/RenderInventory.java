@@ -14,6 +14,7 @@ final class RenderInventory {
     private final TileFlags chunks = new TileFlags(), tiles = new TileFlags();
     private long total;
     private boolean retainSeeds;
+    private TileFlags.Iterator seedIterator;
 
     RenderInventory() {}
     RenderInventory(ConfigurationNode n) throws IOException {
@@ -34,6 +35,7 @@ final class RenderInventory {
         n.put("retain-seeds", retainSeeds);
         return n;
     }
+    synchronized void completed(long count) {phase="done";total=Math.max(0,count);chunks.clear();tiles.clear();}
     synchronized long total() { return total; }
     synchronized boolean done() { return phase.equals("done") || phase.equals("unavailable"); }
     synchronized String phase() { return phase; }
@@ -41,11 +43,12 @@ final class RenderInventory {
     synchronized void retainSeeds() { retainSeeds = true; }
     synchronized boolean hasSeeds() { return retainSeeds && tiles.countFlags() > 0; }
     synchronized TileFlags.TileCoord nextUnseenSeed(TileFlags found) {
-        var iterator = tiles.getIterator(); var coordinate = new TileFlags.TileCoord();
+        if(seedIterator==null)seedIterator=tiles.getIterator();
+        var iterator = seedIterator; var coordinate = new TileFlags.TileCoord();
         int remaining = Math.min(4096, tiles.countFlags());
         while (remaining-- > 0 && iterator.next(coordinate)) {
             tiles.setFlag(coordinate.x, coordinate.y, false);
-            if (!found.getFlag(coordinate.x, coordinate.y)) return coordinate;
+            if (found == null || !found.getFlag(coordinate.x, coordinate.y)) return coordinate;
         }
         return null;
     }

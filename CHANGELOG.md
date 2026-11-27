@@ -1,6 +1,24 @@
 # Changelog
 
+## 1.0.1
+
+- Redirect plain HTTP GET/HEAD on the HTTPS map port to the configured HTTPS
+  hostname and port, preserving map links and query parameters. Plaintext map
+  content remains inaccessible; forwarded headers and URI schemes cannot bypass TLS.
+- Keep TLS-only behavior when HTTPS redirects are disabled.
+- Keep routine automated-render messages out of the normal console log; expose
+  their progress through stats/progress commands while retaining manual updates
+  and actionable warnings/errors.
+- Correct the HTTPS setup examples to mc.megacitycraft.com.
+
+- Add optional native HTTPS with automatic Let's Encrypt HTTP-01 issuance and
+  renewal, private certificate storage, persisted orders/retries, live certificate
+  replacement, staging support and certificate status in `/mccmap stats`.
+
 ## 1.0.0
+
+- Fill missing native base tiles across selected maps before refreshing pre-existing
+  tiles during full renders; checkpoint both passes and defer cleanup safely.
 
 - Reduce occupied-server full/radius rendering to 25% and natural rendering to 10%
   of the original baseline, with a one-worker online limit to reduce CPU bursts.

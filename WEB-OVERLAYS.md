@@ -1,6 +1,6 @@
 # Web connection logging and native overlays
 
-These changes retain development version 1.0.0.
+Available in MCCMap 1.0.1.
 
 ## Optional connection log
 

@@ -3,3 +3,8 @@ Based on https://github.com/webbukkit/dynmap (Apache License 2.0).
 Original Dynmap contributors retain their copyrights.
 Dynmap is a registered trademark of Michael Primm. This fork is not endorsed
 or supported by the Dynmap team. Support belongs with the MCCMap maintainer.
+
+HTTPS support bundles acme4j (Apache License 2.0), jose4j (Apache License 2.0)
+and Bouncy Castle (MIT-style Bouncy Castle license). Their license and notice
+resources are retained in the distribution, including BOUNCY-CASTLE-LICENSE.txt. Let's Encrypt is an external
+certificate authority; MCCMap is not affiliated with or endorsed by it.

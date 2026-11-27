@@ -187,4 +187,14 @@ class LegacyTileStorageTest {
         var tile=storage.getTile(world,map,-563,-312,0,MapType.ImageVariant.STANDARD);assertFalse(tile.exists());assertNull(tile.read());assertTrue(Files.exists(old));
     }
 
+    @Test void delayedFullRenderCleanupPreservesPlayerUpdatesWrittenAfterTheInventoryStarted() throws Exception {
+        render(0,0,0);render(1,0,0);
+        var old=root.resolve("tiles/world/flat_rnew/0_0/0_0.png");var fresh=root.resolve("tiles/world/flat_rnew/0_0/1_0.png");
+        Files.setLastModifiedTime(old,java.nio.file.attribute.FileTime.fromMillis(1000));Files.setLastModifiedTime(fresh,java.nio.file.attribute.FileTime.fromMillis(3000));
+        var hd=mock(org.dynmap.hdmap.HDMap.class);when(hd.getName()).thenReturn("flat");when(hd.getPrefix()).thenReturn("flat_rnew");when(hd.getImageFormat()).thenReturn(MapType.ImageFormat.FORMAT_PNG);when(hd.getVariants()).thenReturn(new MapType.ImageVariant[]{MapType.ImageVariant.STANDARD});
+        doReturn(storage).when(world).getMapStorage();doCallRealMethod().when(hd).purgeOldTiles(eq(world),any(org.dynmap.utils.TileFlags.class),eq(2000L));
+        hd.purgeOldTiles(world,new org.dynmap.utils.TileFlags(),2000);
+        assertFalse(Files.exists(old));assertTrue(Files.exists(fresh));
+    }
+
 }

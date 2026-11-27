@@ -64,6 +64,7 @@ shadowJar {
     manifest { attributes('paperweight-mappings-namespace': 'mojang') }
     from(rootProject.file('LICENSE'))
     from(rootProject.file('NOTICE'))
+    from(rootProject.file('BOUNCY-CASTLE-LICENSE.txt'))
     destinationDirectory = file '../target'
     archiveBaseName = "MCCMap"
     archiveClassifier = 'paper'

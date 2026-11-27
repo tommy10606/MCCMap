@@ -4,6 +4,9 @@ import java.util.*;
 final class PublicMapSettings {
     static boolean migrate(ConfigurationNode config) {
         boolean changed=StaleTileRefreshSettings.migrate(config);
+        changed|=defaults(config,"https",Map.of("enabled",false,"domain","","public-port",0,"redirect-http",true));
+        var https=config.getNode("https");
+        if(https!=null)changed|=defaults(https,"letsencrypt",Map.of("enabled",true,"agree-to-terms",false,"email","","staging",false,"challenge-bindaddress","0.0.0.0","challenge-port",8080));
         // One-time migration from this unreleased fork's former high-detail default.
         if(!config.containsKey("render-quality-settings-version")) {
             String profile=config.getString("render-quality","high");

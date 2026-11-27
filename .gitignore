@@ -10,3 +10,7 @@ run/
 .settings/
 .idea/
 .DS_Store
+# Runtime certificates and ACME account keys must remain private.
+tls/
+*.pk8
+*.p12

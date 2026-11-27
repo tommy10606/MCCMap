@@ -349,6 +349,26 @@ webserver-connection-log:
 # The TCP-port the webserver will listen on.
 webserver-port: 8123
 
+# Built-in HTTPS is optional. See HTTPS.md before enabling.
+# The map uses webserver-port for TLS. Public TCP 80 must reach challenge-port
+# for Let's Encrypt HTTP-01 validation (forward 80 -> 8080; do not run Paper as root).
+https:
+  enabled: false
+  domain: ""
+  # 0 means webserver-port. Use 443 if an external forward maps 443 to that port.
+  public-port: 0
+  # Redirect HTTP GET/HEAD on the map port and the HTTP-01 listener to HTTPS.
+  redirect-http: true
+  letsencrypt:
+    enabled: true
+    # Explicitly accept https://letsencrypt.org/repository/ before setting true.
+    agree-to-terms: false
+    email: ""
+    staging: false
+    challenge-bindaddress: 0.0.0.0
+    challenge-port: 8080
+
+
 # Maximum HTTP worker threads.
 max-connections: 30
 
@@ -520,7 +540,7 @@ soft-ref-cache: true
 # Send this message if the player does not have permission to use the command
 noPermissionMsg: "You don't have permission to use this command!"
 
-# Set to true to enable verbose startup messages - can help with debugging map configuration problems
+# Set to true for verbose startup and automated-render diagnostics while troubleshooting
 # Set to false for a much quieter startup log
 verbose: false
 

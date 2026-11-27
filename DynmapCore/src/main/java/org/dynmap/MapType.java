@@ -168,6 +168,7 @@ public abstract class MapType {
     }
 
     public void purgeOldTiles(DynmapWorld world, TileFlags rendered) { }
+    public void purgeOldTiles(DynmapWorld world,TileFlags rendered,long preserveAfter) {purgeOldTiles(world,rendered);}
 
     public interface FileCallback {
         public void fileFound(File f, File parent, boolean day);

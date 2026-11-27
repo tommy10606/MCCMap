@@ -43,10 +43,16 @@ borders are the automatic fallback when that plugin is absent or disabled, and c
 Optional TCP peer IP:port logging is disabled by default. See `WEB-OVERLAYS.md` for
 configuration, log rotation/privacy controls, and overlay behavior.
 
+## Built-in HTTPS
+
+Optional HTTPS includes automatic Let's Encrypt certificate issuance and renewal.
+It is disabled by default. See [HTTPS.md](HTTPS.md) for hostname, port forwarding,
+staging tests and certificate backup instructions.
+
 ## Dependencies
 
 See `DEPENDENCIES.md` for the dependency audit, compatibility pins and runtime
-ownership. This remains development version 1.0.0; changing the JAR refreshes
+ownership. The current version is 1.0.1; changing the JAR refreshes
 bundled assets through a build fingerprint without a version bump.
 
 ## Build
@@ -63,7 +69,7 @@ Windows:
 gradlew.bat :paper:shadowJar :paper:test :DynmapCore:test
 ```
 
-The installable file is `target/MCCMap-1.0.0-paper.jar`. Other module JARs are build
+The installable file is `target/MCCMap-1.0.1-paper.jar`. Other module JARs are build
 components, not standalone plugins. Gradle downloads the matching Paper development
 bundle; do not bundle or redistribute a Minecraft server JAR with this source.
 
@@ -181,6 +187,30 @@ The 60-day stale refresh continues to target 10% of the original baseline, witho
 applying either player-count multiplier. Normal block-change updates also keep
 their existing scheduling. `/mccmap stats` shows the current full/radius speed multiplier.
 
+## Missing-first full renders
+
+A normal `/mccmap fullrender <world>` or `<world>:<map>` makes two passes over
+selected writable HD maps. It first inventories generated terrain and fills every
+missing native base tile across those maps. It then refreshes tiles that already
+existed when checked. All required day/night variants and maps sharing a render
+must exist before a coordinate is deferred to the second pass. Read-only legacy
+previews do not count as native coverage on the new resolution grid.
+
+The second pass does not repeat tiles filled by the first pass. Disconnected
+generated areas are included, without generating new world chunks. Existing tile
+cleanup waits until the refresh pass and retains the first pass's valid render
+bitmap, so it cannot delete newly filled coverage. Native tiles updated since the
+job began are protected under a write lock during delayed cleanup as well. Player-aware pacing, TPS holds
+and disk safeguards apply to both passes.
+
+Inventories and deferred work use compact coordinate bitmaps, rather than a
+world-sized queue of render objects. Classification yields in bounded batches.
+Both passes, selected/in-flight tiles and their scan positions are checkpointed;
+`/mccmap progress` identifies the current pass. Older full-render checkpoints from
+before this ordering upgrade safely restart the coverage scan; rendered images
+remain intact. Natural rendering, radius/update renders and explicit
+`/mccmap fullrender resume ...` retain their previous behavior.
+
 ## Render completion estimates
 
 Use `/mccmap progress [world]` for a concise, colored status, or `/mccmap stats`
@@ -223,7 +253,7 @@ natural-render:
 
 With players online, automatic work targets 25% of the original full-render
 baseline. Empty servers use `full-render-speed/no-players-percent` (125% by
-default). Manual full/radius renders retain their independent 125%/50% policy;
+default). Manual full/radius renders retain their independent 125%/25% policy;
 60-day stale refresh retains its separate 10% pacing.
 
 The automatic pass reuses current native tiles only when all configured variants
@@ -235,6 +265,12 @@ Generated-chunk inventory supplies additional seeds for disconnected terrain,
 using the same bounded queue and pacing. These automatic repairs never enter
 the normal-speed update queue. Manual full-render repair checks remain separate.
 Existing stale tiles are handled by the stale refresher.
+
+Routine automatic render starts/completions and missing-tile scan summaries are
+quiet in the normal console log. Use `/mccmap progress [world]`,
+`/mccmap naturalrender status` or `/mccmap stats` to see current work. Manual render
+updates and actionable warnings/errors remain visible. Set `verbose: true` to
+include automated-render diagnostics while troubleshooting.
 
 `/mccmap naturalrender [status|on|off|resume]` requires `mccmap.fullrender`.
 On/off state and explicit world cancellations persist with recovery checkpoints.

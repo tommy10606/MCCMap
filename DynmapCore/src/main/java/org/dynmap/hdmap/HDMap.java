@@ -407,7 +407,9 @@ public class HDMap extends MapType {
     }
 
     @Override
-    public void purgeOldTiles(final DynmapWorld world, final TileFlags rendered) {
+    public void purgeOldTiles(final DynmapWorld world, final TileFlags rendered) {purgeOldTiles(world,rendered,0);}
+    @Override
+    public void purgeOldTiles(final DynmapWorld world,final TileFlags rendered,final long preserveAfter) {
         final MapStorage ms = world.getMapStorage();
         try {org.dynmap.TileScanJournal.run(world,this,"purge-"+Integer.toHexString(rendered.save().hashCode()),tile -> {
             ImageEncoding fmt=getImageFormat().getEncoding();
@@ -427,11 +429,15 @@ public class HDMap extends MapType {
                 if (rendered.getFlag(tile.x, tile.y)) {  /* If we rendered this tile, its good */
                     return;
                 }
-                /* Otherwise, delete tile */
-                tile.delete();
-                /* Push updates, clear hash code, and signal zoom tile update */
-                MapManager.mapman.pushUpdate(world, new Client.Tile(tile.getURI()));
-                tile.enqueueZoomOutUpdate();
+                // New player updates can land outside the initial inventory while the
+                // missing pass is running. Recheck their date under the write lock.
+                if(!tile.getWriteLock())return;
+                try {
+                    if(preserveAfter>0 && tile.getLastModified()>=preserveAfter)return;
+                    tile.delete();
+                    MapManager.mapman.pushUpdate(world, new Client.Tile(tile.getURI()));
+                    tile.enqueueZoomOutUpdate();
+                } finally {tile.releaseWriteLock();}
             }
         },()->{var n=new org.dynmap.ConfigurationNode();var state=world.getMapState(this);if(state!=null)n.put("zoom",state.saveZoomOut());return n;},saved->{var state=world.getMapState(this);if(state!=null)state.mergeZoomOut(saved.getList("zoom"));},()->{if(!MapManager.mapman.checkpointWorld(world))throw new IllegalStateException("Zoom queue checkpoint failed");});}
         catch(java.io.IOException failure){org.dynmap.Log.warning("Tile cleanup paused; previous scan checkpoint retained");}

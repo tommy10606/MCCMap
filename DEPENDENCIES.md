@@ -1,6 +1,6 @@
-# MCCMap dependencies — November 15, 2026
+# MCCMap dependencies — November 24, 2026
 
-Development version remains **1.0.0**. Map storage is local-file-only. SQL/S3
+MCCMap version **1.0.1**. Map storage is local-file-only. SQL/S3
 implementations and PostgreSQL, AWS SDK, EventStream and Reactive Streams runtime
 libraries have been removed. No JDBC drivers or remote-storage clients are bundled.
 
@@ -13,6 +13,9 @@ libraries have been removed. No JDBC drivers or remote-storage clients are bundl
 | paperweight | 2.0.0-beta.24 |
 | Jetty server and EE8 nested support | 12.1.14 |
 | Jetty servlet API | 4.0.9 |
+| acme4j client | 5.1.0; automatic Let's Encrypt HTTP-01 |
+| jose4j | 0.9.7; ACME signed requests |
+| Bouncy Castle provider / PKIX / util | 1.87; certificate signing requests |
 | SnakeYAML | 2.7 |
 | OWASP Java HTML Sanitizer | 20261103.2 |
 | JSON-simple | 1.1.1 |

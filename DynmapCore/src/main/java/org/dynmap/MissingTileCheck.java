@@ -57,7 +57,7 @@ public final class MissingTileCheck implements AutoCloseable {
                 expected.setFlag(coord.x,coord.y,false);maybeSave();
             }
             if(!manager.checkpointWorld(world))throw new IOException("Repair queue checkpoint failed");if(store!=null)store.delete();complete=true;state="complete";
-            Log.info("Missing tile check for '"+world.getName()+"': checked "+examined+" tiles; queued "+queued+" repair jobs and "+zoomQueued+" zoom repairs.");
+            Log.verboseinfo("Missing tile check for '"+world.getName()+"': checked "+examined+" tiles; queued "+queued+" repair jobs and "+zoomQueued+" zoom repairs.");
         }catch(InterruptedException interrupted){Thread.currentThread().interrupt();state="stopped";}catch(IOException|RuntimeException failure){state="failed; see console";Log.warning("Missing tile check failed; normal rendering remains enabled");}finally{if(!complete)save();}}
     }
     private static String borderKey(Polygon border){if(border==null)return "none";var points=new ArrayList<String>();for(int i=0;i<border.size();i++){var p=border.getVertex(i);points.add(p.x+":"+p.y);}return points.toString();}
